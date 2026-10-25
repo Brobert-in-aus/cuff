@@ -11,7 +11,8 @@ MIT licensed (`LICENSE`).
 ## What you get
 
 - **Status bar:** the time, and the headset, controller and any Bluetooth headphone batteries,
-  including whether a battery pack is keeping up.
+  including whether a battery pack is keeping up. AirPods need LibrePods: see
+  [AirPods battery](docs/AIRPODS.md).
 - **Quick actions:** dictation (talk, and the text is typed into the selected dialogue box), mic mute,
   passthrough, recenter, the SteamVR keyboard, and a screenshot (on a three second countdown).
 - **Tabs:**

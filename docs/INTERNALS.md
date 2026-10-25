@@ -113,11 +113,17 @@ tab, or none, is remembered across restarts (`~/.cache/cuff/state.json`).
   - **Fitting four batteries.** The bar is compact enough for "12:52 pm" plus four
     batteries reading 100: 12 px clock with a 9 px suffix, 9 px battery text, 10 px icons
     and 3 px gaps, leaving 5.2 px spare with the headphones glyph.
-  - **The earbuds** come from BlueZ: a connected audio `org.bluez.Device1` with a
-    `Battery1` percentage, polled every 30 s by `quick.py`. It's one figure for the pair;
-    the WF-1000XM3 reported 100 over HFP. They're read
-  every 10 s (every 2 s while one hasn't reported yet), and the panel is redrawn only when
-  the minute or a battery value changes.
+  - **The earbuds:** a connected audio `org.bluez.Device1`, polled every 3 s by
+    `quick.py`. It's one figure for the pair, from one of two sources:
+    - **BlueZ's `Battery1`**, where the device gives one. The WF-1000XM3 does, over HFP, but
+      only now and then: it was still at 50 % when it said "battery low" itself, then
+      jumped to 20 %. So a new level refreshes the status bar at once.
+    - **LibrePods**, for AirPods, which give BlueZ no `Battery1`. Its log has every per-bud
+      and case report (`librepods.py` follows the `librepods` user unit's journal, since it
+      has no API). The figure is the lower bud in use (one LibrePods reports as
+      `Disconnected` doesn't count), shown as charging while either is.
+  - **When batteries are read:** every 10 s (every 2 s while one hasn't reported yet), and
+    the panel is redrawn only when the minute or a battery value changes.
   - **The headset** comes from the Frame's own power supplies (`/sys/class/power_supply`):
     the battery's level, current and status, and whether the USB-C input is live. That
     gives three states, so a pack running flat is easy to spot:
@@ -170,6 +176,7 @@ tab, or none, is remembered across restarts (`~/.cache/cuff/state.json`).
 | `cuff/pc.py` | Finds Cuff for PC from its announcements, remembers it, and says whether it's there |
 | `cuff/placement.py` | The panel's size and placement: slider definitions, pending and applied values, `placement.json` |
 | `cuff/quick.py` | Mic mute and recenter on a worker thread, plus state polling (mic mute, the dictation server, Bluetooth earbuds) |
+| `cuff/librepods.py` | AirPods battery from LibrePods' journal (it has no API) |
 | `cuff/dictation.py` | The dictation button: recording, transcription (PC servers, then the local model), typing |
 | `cuff/stt_local.py` | The on-headset model, as a helper process started on the first tap and gone after 5 idle minutes |
 | `cuff/steam.py` | Steam's client API over its CEF debugger, for typing |

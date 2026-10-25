@@ -489,7 +489,10 @@ def main(debug=False):
                             print(f"passthrough: SteamVR reports {'on' if shown else 'off'}", flush=True)
                         quick.set_passthrough(shown)
                 missing = renderer.status is None or any(lv is None for _, lv, _ in renderer.status["batteries"])
-                if (now - last_status > (2 if missing else 10)
+                # Earbuds report their battery only now and then, so take a new level at once.
+                earbuds = None if renderer.status is None else next(
+                    (lv for label, lv, _ in renderer.status["batteries"] if label == "E"), None)
+                if (now - last_status > (2 if missing else 10) or quick.state.get("earbuds") != earbuds
                         or not renderer.status["time"].startswith(time.strftime("%-I:%M "))):
                     last_status = now
                     status = read_status(system, hands, quick)

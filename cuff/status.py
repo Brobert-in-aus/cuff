@@ -55,10 +55,10 @@ def headset_power(system):
 
 def read_status(system, hands, quick):
     """Time and batteries for the status bar: headset, left and right controllers, and (E)
-    Bluetooth earbuds while connected ones report a level (quick.py polls BlueZ)."""
+    Bluetooth earbuds while connected ones report a level (quick.py: BlueZ, or LibrePods for AirPods)."""
     batteries = [("H", *headset_power(system)),
                  ("L", *battery(system, hands.index("left"))),
                  ("R", *battery(system, hands.index("right")))]
     if quick.state.get("earbuds") is not None:
-        batteries.append(("E", quick.state["earbuds"], "battery"))
+        batteries.append(("E", quick.state["earbuds"], "charging" if quick.state.get("earbuds_charging") else "battery"))
     return {"time": time.strftime("%-I:%M %p").lower(), "batteries": batteries}

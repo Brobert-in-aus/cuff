@@ -23,6 +23,7 @@ FRAME = {
     "real_mic": "alsa_loopback_device.alsa_input.platform-sound.HiFi__Mic__source",
     "screenshot_dir": "~/Pictures/Frame screenshots",
     "compositor_log": "~/.local/share/Steam/logs/vrcompositor.txt",  # Room View's state in a game
+    "librepods_unit": "librepods",  # LibrePods' systemd user unit, for AirPods battery (librepods.py)
     "font_dir": "/usr/share/fonts/noto",
 }
 
