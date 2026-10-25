@@ -1,0 +1,12 @@
+[Unit]
+Description=Cuff (SteamVR wrist panel)
+After=graphical-session.target
+
+[Service]
+Environment=PYTHONPATH=%h/.local/share/cuff/app
+ExecStart=%h/.local/share/cuff/venv/bin/python -m cuff
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

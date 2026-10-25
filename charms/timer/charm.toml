@@ -1,0 +1,9 @@
+id = "timer"
+name = "Timer"
+version = "1.0.0"
+api = 1
+entry = "timer:Timer"
+permissions = ["toasts"]
+
+[tab]
+label = "Timer"

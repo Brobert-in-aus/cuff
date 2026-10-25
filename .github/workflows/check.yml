@@ -1,0 +1,18 @@
+name: check
+on: [push, pull_request]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Nothing private
+        run: sh tools/check-private.sh .
+      - name: No undefined names
+        run: pip install pyflakes && python -m pyflakes cuff charms pc-server/server.py pc-server/stream.py pc-server/beacon.py pc-server/pairing.py | grep -v "imported but unused" | tee /dev/stderr | (! grep -q .)
+      - name: Everything compiles
+        run: python -m compileall -q cuff charms pc-server/server.py pc-server/stream.py pc-server/beacon.py pc-server/pairing.py
+      - name: Shell scripts parse
+        run: for f in install.sh get-cuff.sh tools/*.sh; do sh -n "$f"; done

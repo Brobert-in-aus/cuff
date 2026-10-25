@@ -1,0 +1,40 @@
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+*.local
+*.local.*
+secrets.*
+!secrets.example.*
+
+# Agent and editor machine state
+.codex/
+.claude/
+.idea/
+.vscode/
+*.user
+*.suo
+
+# Common generated output
+artifacts/
+_downloads/
+build/
+dist/
+bin/
+obj/
+node_modules/
+DerivedData/
+xcuserdata/
+.swiftpm/
+*.xcuserstate
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+
+# Python
+__pycache__/
+*.pyc
+media/

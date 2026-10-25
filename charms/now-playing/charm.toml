@@ -1,0 +1,10 @@
+id = "now-playing"
+name = "Now playing"
+version = "1.2.0"
+api = 1
+entry = "now_playing:NowPlaying"
+permissions = []  # MPRIS over the session D-Bus
+
+[tab]
+label = "Now Playing"
+

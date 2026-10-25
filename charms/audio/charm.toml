@@ -1,0 +1,9 @@
+id = "audio"
+name = "Audio"
+version = "1.0.0"
+api = 1
+entry = "audio:Audio"
+permissions = ["audio", "commands"]  # pactl: volume, mute, default output
+
+[tab]
+label = "Audio"

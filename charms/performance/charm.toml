@@ -1,0 +1,9 @@
+id = "performance"
+name = "Performance"
+version = "1.0.0"
+api = 1
+entry = "performance:Performance"
+permissions = ["frame-stats", "pc", "network", "commands"]  # iw, ip and ping for the links
+
+[tab]
+label = "Perf"
