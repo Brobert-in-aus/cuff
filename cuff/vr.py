@@ -414,6 +414,68 @@ class Layer:
             self.ov.destroyOverlay(h)
 
 
+class RoomView:
+    """Whether Room View is showing.
+
+    With no game running, SteamVR keeps it in camera/enableConstructRoomView (absent when off).
+    In a game (a scene app, Steam Link's vrlink included) that setting stays as it was while
+    the dashboard and the mailbox turn Room View on and off over the game, so the compositor's
+    own log is read instead: its system layer logs "room view for scene apps was enabled" and
+    "room view was turned off". The log is one file per SteamVR run; on opening, the last such
+    line in it gives the state so far."""
+
+    ON, OFF = "room view for scene apps was enabled", "room view was turned off"
+
+    def __init__(self, settings, compositor, log_path):
+        self.settings, self.compositor = settings, compositor
+        self.path = os.path.expanduser(log_path)
+        self.in_game = False  # the log's state, from its latest line
+        self.log, self.ino = None, None
+        self._open()
+
+    def _open(self):
+        """(Re)open the log and read it through: it only covers this SteamVR run."""
+        self.in_game = False
+        if self.log is not None:
+            self.log.close()
+        try:
+            self.log = open(self.path, errors="replace")
+            self.ino = os.fstat(self.log.fileno()).st_ino
+        except OSError:
+            self.log = None
+            return
+        self._read()
+
+    def _read(self):
+        for line in self.log.readlines():
+            if self.ON in line:
+                self.in_game = True
+            elif self.OFF in line:
+                self.in_game = False
+
+    def _setting(self):
+        try:
+            return bool(self.settings.getBool("camera", "enableConstructRoomView"))
+        except openvr.error_code.OpenVRError:
+            return False
+
+    def _game(self):
+        try:
+            return bool(self.compositor.getCurrentSceneFocusProcess())
+        except (AttributeError, openvr.error_code.OpenVRError):
+            return False
+
+    def shown(self):
+        """Call a few times a second: it also follows the log."""
+        try:
+            if self.log is None or os.stat(self.path).st_ino != self.ino:
+                self._open()  # a new SteamVR run starts a new log
+        except OSError:
+            pass
+        if self.log is not None:
+            self._read()
+        return self.in_game if self._game() else self._setting()
+
 
 class Mailbox:
     """SteamVR's own message mailboxes (vrclient's IVRMailbox_001), the route its dashboard

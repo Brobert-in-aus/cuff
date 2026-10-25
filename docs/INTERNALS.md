@@ -271,14 +271,22 @@ SteamVR calls passthrough "Room View".
     2.18.4 on the Frame. `vr.Mailbox` records that version.
 - **It's checked, since it's undocumented.** At startup Cuff opens the mailbox once and logs
   the runtime version, noting when it isn't the tested one. If the interface is missing or
-  registering fails, the button is greyed out. After each press, SteamVR's Room View setting
+  registering fails, the button is greyed out. After each press, Room View's state (below)
   must follow within 4 s, or the button is greyed out for the rest of the run, with the
   reason in the log.
-- **The button's state** is SteamVR's `camera/enableConstructRoomView` setting. It's
-  written as `true` when Room View is on and removed when it's off, whether the panel or
-  the dashboard toggled it. The overlay loop reads it every 2 s (every 0.25 s while a press
-  awaits confirmation) and on `CameraSettingsHaveChanged`.
-  `VREvent_RoomViewShown`/`Hidden` never arrived.
+- **The button's state** (`vr.RoomView`) comes from two places, depending on whether a game
+  (a scene app, Steam Link's `vrlink` included) has focus.
+  - **No game:** SteamVR's `camera/enableConstructRoomView` setting. It's written as `true`
+    when Room View is on and removed when it's off, whether the panel or the dashboard
+    toggled it.
+  - **In a game:** the setting stays as it was while Room View goes on and off over the
+    game. So the state comes from the compositor's log
+    (`~/.local/share/Steam/logs/vrcompositor.txt`), whose system layer logs "room view for
+    scene apps was enabled" and "room view was turned off". Cuff reads the log through on
+    start, and again when a new SteamVR run starts a new one, then follows it.
+  - Before this, a press in a game always asked for "off" and was greyed out.
+  - **When it's read:** every 2 s, every 0.25 s while a press awaits confirmation, and on
+    `CameraSettingsHaveChanged`. `VREvent_RoomViewShown`/`Hidden` never arrived.
 - **Routes that don't work:**
   - Writing that setting: it changes, but the compositor only reports it, so Room View
     doesn't follow.

@@ -351,12 +351,8 @@ def main(debug=False):
     settings = openvr.VRSettings()
     compositor, apps = openvr.VRCompositor(), openvr.VRApplications()
 
-    def roomview_on():
-        """SteamVR keeps Room View's on/off in camera/enableConstructRoomView (absent when off)."""
-        try:
-            return bool(settings.getBool("camera", "enableConstructRoomView"))
-        except openvr.error_code.OpenVRError:
-            return False
+    roomview = vr.RoomView(settings, compositor, config.PROFILE["compositor_log"])
+    roomview_on = roomview.shown
 
     # Passthrough goes through SteamVR's undocumented mailbox, so it's checked twice: the
     # mailbox must open at startup, and after a press SteamVR's own Room View setting must

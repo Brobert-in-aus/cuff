@@ -22,6 +22,7 @@ FRAME = {
     "vrcmd": "/opt/steamvr/bin/linuxarm64/vrcmd",
     "real_mic": "alsa_loopback_device.alsa_input.platform-sound.HiFi__Mic__source",
     "screenshot_dir": "~/Pictures/Frame screenshots",
+    "compositor_log": "~/.local/share/Steam/logs/vrcompositor.txt",  # Room View's state in a game
     "font_dir": "/usr/share/fonts/noto",
 }
 
