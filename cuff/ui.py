@@ -2,14 +2,15 @@
 
 Coordinates are logical pixels on a W x H canvas, drawn at SCALE for sharp text.
 Top to bottom:
-  status bar   time, batteries; never interactive          } fixed: the core draws these,
-  quick row    dictation, mic mute, passthrough, recenter, } the same for everyone
-               keyboard, screenshot                        }
+  status bar   time, batteries; never interactive          } the core draws these on
+  quick row    six slots of buttons chosen in Settings >   } every page
+               Quick, from the core's and charms' (quickrow.py)
   tab row      one tab per charm; tapping the open one collapses it (page None): the image
                then ends under the tabs, H_COLLAPSED tall instead of H_OPEN
   page         PAGE, drawn by the open charm
 Charms draw with the helpers here (s, FONTS, glyph, ellipsize, wrap and the colours).
-To add a quick action: an entry in QUICK, a glyph in glyph(), and its handler in quick.py.
+A core quick button: an entry in quickrow.CORE and core_look(), a glyph in glyph(), and its
+handler in app.py's press() (or quick.py). Charms add theirs through charm.toml (quickrow.py).
 """
 import math
 import sys
@@ -17,6 +18,7 @@ import sys
 from PIL import Image, ImageDraw, ImageFont
 
 from . import charm as charms
+from . import quickrow
 from .config import PROFILE
 
 W, SCALE = 240, 2
@@ -37,7 +39,6 @@ PHASE_COLOUR = {"idle": BUTTON, "listening": (226, 58, 58, 255), "transcribing":
                 "done": BUTTON, "error": BUTTON}
 
 QUICK_Y, QUICK_H = 32, 24  # the quick-actions row
-QUICK = ["dictation", "mic", "passthrough", "recenter", "keyboard", "screenshot"]  # left to right
 TABS_Y, TAB_H = 60, 22  # the tab row
 PAGE_Y = 88  # top of the page card
 PAGE = (8, PAGE_Y, W - 8, PAGE_Y + 134)  # the open charm's area
@@ -46,9 +47,30 @@ H_COLLAPSED = TABS_Y + TAB_H + 6  # with every tab closed
 H = H_OPEN  # the layout the coordinates belong to
 
 # id -> (x0, y0, x1, y1): the quick row and tabs on every page, plus the open charm's buttons.
-_qw = (W - 16 - 4 * (len(QUICK) - 1)) / len(QUICK)
-QUICK_BUTTONS = {f"q:{name}": (8 + i * (_qw + 4), QUICK_Y, 8 + i * (_qw + 4) + _qw, QUICK_Y + QUICK_H)
-                 for i, name in enumerate(QUICK)}
+_qw = (W - 16 - 4 * (quickrow.SLOTS - 1)) / quickrow.SLOTS
+QUICK_SLOTS = [(8 + i * (_qw + 4), QUICK_Y, 8 + i * (_qw + 4) + _qw, QUICK_Y + QUICK_H) for i in range(quickrow.SLOTS)]
+QUICK_STYLE = {"normal": (BUTTON, FG), "on": (PASSTHROUGH_ON, FG), "alert": (LOW, FG),
+               "busy": (PHASE_COLOUR["transcribing"], FG), "dim": (BUTTON, DIM), "off": (DISABLED, DIM)}
+
+
+def spans(labels, x0, x1, gap=4, size="small", pad=8):
+    """[(left, right)] for a row of sub-tabs: equal widths while every label fits, else
+    each as wide as its label plus an equal share of what's left."""
+    n = max(1, len(labels))
+    need = [FONTS[size].getlength(lb) / SCALE + pad for lb in labels]
+    room = x1 - x0 - gap * (n - 1)
+    widths = [room / n] * n if max(need, default=0) <= room / n else [nd + (room - sum(need)) / n for nd in need]
+    out, x = [], x0
+    for wd in widths:
+        out.append((x, x + wd))
+        x += wd + gap
+    return out
+
+
+def quick_buttons(slots=None):
+    """{"q:<button id>": box} for the quick row's filled slots (empty ones aren't touchable)."""
+    slots = quickrow.row() if slots is None else slots
+    return {f"q:{b}": QUICK_SLOTS[i] for i, b in enumerate(slots) if b}
 
 
 SETTINGS_TAB = "settings"  # the core's own tab, always last, drawn as a gear
@@ -112,7 +134,7 @@ def buttons(tabs, charm=None, tab_page=0):
         own = charms.call(charm, "buttons")
         if own is not charms.FAILED:
             page_buttons = {f"c:{k}": box for k, box in own.items()}
-    return {**QUICK_BUTTONS, **tab_buttons(tabs, tab_page), **page_buttons}
+    return {**quick_buttons(), **tab_buttons(tabs, tab_page), **page_buttons}
 
 
 def height(page):
@@ -219,6 +241,10 @@ def glyph(d, name, box, colour, bg=BG):
                 x = cx - 7.5 + k * 3.75
                 d.rectangle(s(x - 1, y - 0.8, x + 1, y + 0.8), fill=colour)
         d.rectangle(s(cx - 5, cy + 2.5, cx + 5, cy + 3.8), fill=colour)
+    elif name == "record":  # a dot, red while it can record
+        d.ellipse(s(cx - 6, cy - 6, cx + 6, cy + 6), fill=LOW if colour == FG else colour)
+    elif name == "stop":
+        d.rounded_rectangle(s(cx - 5.5, cy - 5.5, cx + 5.5, cy + 5.5), radius=1.5 * SCALE, fill=colour)
     elif name == "screenshot":  # camera
         d.rounded_rectangle(s(cx - 9, cy - 5, cx + 9, cy + 7), radius=2 * SCALE, fill=colour)
         d.rectangle(s(cx - 4, cy - 8, cx + 4, cy - 4), fill=colour)
@@ -395,9 +421,9 @@ def _badge(d, x, cy, badge):
     d.text(s(x + 2.5, cy - 4.5), text, font=font, fill=(16, 18, 26, 255))
 
 
-def render(status, quick, stt, pressed, tabs, page, charm, title=True, tab_page=0, toast=None, badges=None):
+def render(status, quick, pressed, tabs, page, charm, title=True, tab_page=0, toast=None, badges=None):
     """status: {"time": str, "batteries": [(label, level or None, "charging"|"plugged"|"battery")]}
-    quick: {"mic_muted", "passthrough", "keyboard", "keyboard_target", "stt_up"}; stt: Dictation.state.
+    quick: {button id: {"glyph", "style", "text"}} for the quick row's buttons (quickrow.looks).
     tabs: [(charm id, label)]; page: the open charm's id, or None with every tab closed (a
     shorter image); charm: that charm. title: let the charm draw its marquee text (False when
     a Marquee layer draws it). tab_page: which MAX_TABS tabs the tab row shows.
@@ -417,38 +443,20 @@ def render(status, quick, stt, pressed, tabs, page, charm, title=True, tab_page=
         for label, level, state in groups:
             x = _battery(d, x, 12, label, level, state) + BATTERY_GAP
 
-    # Quick actions. Toggles show their state as a fill; actions only flash when pressed.
-    for name in QUICK:
-        key = f"q:{name}"
-        box = QUICK_BUTTONS[key]
-        fill, colour = BUTTON, FG
-        if name == "dictation":
-            fill = PHASE_COLOUR.get(stt["phase"], BUTTON)
-            if not stt.get("configured", True) or (quick.get("stt_up") is False and stt["phase"] == "idle"):
-                colour = DIM  # no push-to-talk command, or its server isn't answering
-        elif name == "mic" and quick.get("mic_muted"):
-            fill = LOW
-        elif name == "passthrough" and quick.get("passthrough_ok") is False:
-            fill, colour = DISABLED, DIM  # SteamVR's mailbox isn't there or didn't work
-        elif name == "passthrough" and quick.get("passthrough"):
-            fill = PASSTHROUGH_ON
-        elif name == "keyboard" and quick.get("keyboard"):
-            fill = KEYBOARD_ON
-        elif name == "keyboard" and quick.get("keyboard_target") is False:
-            fill, colour = DISABLED, DIM  # no window to type into
-        count = quick.get("countdown") if name == "screenshot" else None
-        if count:
-            fill = PHASE_COLOUR["transcribing"]  # amber while the screenshot counts down
-        if pressed == key:
+    # Quick actions (quickrow.py). Toggles show their state as a fill; actions only flash
+    # when pressed. An empty slot is left blank.
+    for key, box in quick_buttons().items():
+        look = quick.get(key[2:]) or {"glyph": quickrow.glyph_of(key[2:]), "style": "normal"}
+        fill, colour = QUICK_STYLE.get(look.get("style"), QUICK_STYLE["normal"])
+        if pressed == key and look.get("style") != "off":
             fill = PRESSED
         d.rounded_rectangle(s(*box), radius=8 * SCALE, fill=fill)
-        if count:  # 3, 2, 1 in place of the camera
-            font, text = FONTS["medium"], str(count)
+        text = look.get("text") or (None if look.get("glyph") else quickrow.label(key[2:])[:2])
+        if text:  # a countdown's 3, 2, 1 in place of the camera, or a charm button without a glyph
             x0, y0, x1, y1 = box
-            d.text(s((x0 + x1) / 2, (y0 + y1) / 2), text, font=font, fill=FG, anchor="mm")
+            d.text(s((x0 + x1) / 2, (y0 + y1) / 2), text, font=FONTS["medium"], fill=colour, anchor="mm")
             continue
-        icon = {"mic": "mic-muted" if quick.get("mic_muted") else "mic", "passthrough": "eye"}.get(name, name)
-        glyph(d, icon, box, colour)
+        glyph(d, look["glyph"], box, colour, bg=fill)
 
     # Tabs: the open one filled; tapping it again closes it. ‹ › page through more than
     # MAX_TABS; dimmed at the first and last page, with a dot while the open tab is elsewhere.

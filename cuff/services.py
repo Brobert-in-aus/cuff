@@ -16,6 +16,8 @@ import sys
 import threading
 import time
 
+from .atomic import atomic_write_json
+
 SHOW_S = 4.0
 MIN_GAP_S = 3.0
 MAX_QUEUE = 3
@@ -30,13 +32,16 @@ class Prefs:
     battery alerts per device (devices). Defaults on; [alerts] in config.toml can change the
     defaults."""
 
-    DEFAULTS = {"haptic": True, "sound": True, "orb": True, "power": True}
+    DEFAULTS = {"haptic": True, "sound": True, "orb": True, "power": True,
+                "typing": True}  # typing from Cuff for PC (cuff/pc.py), set from the PC's settings page
     # Low battery alerts per device: on or off, and two levels (percent; 0 is off). Steam warns
     # about the headset and controllers itself near the end (see app.BatteryWatch), so those
     # get one earlier level by default; nothing else watches the headphones.
     DEVICES = {"headset": {"on": True, "levels": [20, 0]}, "controllers": {"on": True, "levels": [20, 0]},
                "headphones": {"on": True, "levels": [20, 5]}}
     LEVEL_STEP, LEVEL_MAX = 5, 50
+    # The devices with low battery alerts, as Settings > Alerts and Cuff for PC (cuff.remote) list them.
+    DEVICE_LABELS = [("headset", "Headset"), ("controllers", "Controllers"), ("headphones", "Headphones")]
 
     def __init__(self):
         from .config import CONFIG, CONFIG_FILE
@@ -55,8 +60,14 @@ class Prefs:
                 if d in self.devices:
                     self.devices[d] = {"on": bool(v.get("on", True)),
                                        "levels": [int(x) for x in (list(v.get("levels", [])) + [0, 0])[:2]]}
-        except (OSError, ValueError, TypeError):
+        except FileNotFoundError:
             pass
+        except (OSError, ValueError, TypeError, AttributeError) as e:
+            print(f"alerts: {self.file}: {e!r}; using the defaults", file=sys.stderr, flush=True)
+
+    def reload(self):
+        """alerts.json changed from outside (Cuff for PC)."""
+        self.__init__()
 
     def get(self, key):
         return self.values.get(key, True)
@@ -80,9 +91,7 @@ class Prefs:
 
     def _save(self):
         try:
-            os.makedirs(os.path.dirname(self.file), exist_ok=True)
-            with open(self.file, "w") as f:
-                json.dump({**self.values, "devices": self.devices}, f)
+            atomic_write_json(self.file, {**self.values, "devices": self.devices})
         except OSError as e:
             print(f"alerts: saving: {e!r}", file=sys.stderr, flush=True)
 

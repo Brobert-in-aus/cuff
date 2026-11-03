@@ -10,13 +10,20 @@ Streaming a PC game with Steam Link (the scene app is Steam Link's client, vrlin
            both): home Wi-Fi, and the dongle (the Frame's own 6 GHz access point). Each with
            its band, live bitrate, ping and jitter to the PC, signal and link rate. The PC's
            address on each comes from Steam Link's command line.
+  link     from Cuff for PC too, out of the Steam Link driver's log: the video bitrate, the
+           capacity SteamVR measured the link at (what it carried 90 % of the time), frames
+           held back for the link and bitrate step-downs per minute, and a warning when the
+           dongle is on USB 2
   graph    the game's framerate over the last minute, against the target
-  headset  its display rate and compose time, CPU / GPU / battery temperature, CPU load
+  headset  its display rate and compose time, packets Steam Link's client re-requested and
+           times its decoder got stuck in the last minute (its own log), CPU / GPU / battery
+           temperature, CPU load
 Anything else running on the headset: its framerate, reprojection, an App CPU / App GPU /
 Compositor stack, the graph and the headset line, all from the headset's compositor.
 The tab's badge is a dot while frames drop or the framerate is under 90 % of the target.
 """
 import collections
+import datetime
 import json
 import os
 import re
@@ -199,6 +206,72 @@ class Links(threading.Thread):
             time.sleep(max(0.2, LINKS_EVERY_S - (time.monotonic() - started)))
 
 
+# ---------------------------------------------------------------- the headset's receiver
+
+RECEIVER_LOG = os.path.expanduser("~/.steam/steam/logs/vrlink.txt")
+LOG_LINE = re.compile(r"^(\w{3} \w{3} +\d+ \d{4} \d\d:\d\d:\d\d\.\d+) \[\w+\] - (.*)$")
+RECEIVER_EVENTS = [  # Steam Link's client log; formats seen on the Frame 2026-10-26 and by SteamFrame Advanced Options
+    ("retries", re.compile(r"SVLFEC: substantive retry \((\d+) packets\)")),  # packets lost and re-requested
+    ("late", re.compile(r"received late metadata for frame|accepting a frame for submission without metadata")),
+    ("stuck", re.compile(r"CheckStuck: > \d+ms between our last forward progress")),  # decoder froze; keyframe or reset
+    ("errors", re.compile(r"ExperiencedAnUnrecoverableError|outside of backtrack window|submit with an empty buffer"
+                          r"|Buffer from the pointer != m_nBufferIdForFrameIndex")),
+]
+
+
+class ReceiverLog:
+    """What Steam Link's client on the headset logs going wrong, over the last minute: read()
+    -> {"retries" (packets re-requested), "late", "stuck", "errors"}. Reads only what's new
+    since the last call; a rotated log (Steam Link restarted) is read from the top."""
+
+    WINDOW_S, MAX_READ = 60.0, 256 * 1024
+
+    def __init__(self, path=RECEIVER_LOG):
+        self.path, self.offset, self.anchor = path, None, b""
+        self.events = collections.deque()  # (t, kind, count)
+
+    def read(self, now=None):
+        try:
+            with open(self.path, "rb") as f:
+                size = os.fstat(f.fileno()).st_size
+                head = f.read(64)
+                if self.offset is None or size < self.offset or head != self.anchor:
+                    self.anchor, self.events = head, collections.deque()
+                    self.offset = max(0, size - self.MAX_READ) if self.offset is None else 0
+                self.offset = max(self.offset, size - self.MAX_READ)
+                f.seek(self.offset)
+                data = f.read(size - self.offset)
+        except OSError:
+            return None
+        end = data.rfind(b"\n") + 1
+        self.offset += end
+        for line in data[:end].decode("utf-8", "replace").splitlines():
+            m = LOG_LINE.match(line)
+            if not m:
+                continue
+            for kind, pattern in RECEIVER_EVENTS:
+                hit = pattern.search(m.group(2))
+                if hit:
+                    t = log_time(m.group(1))
+                    if t is not None:
+                        self.events.append((t, kind, int(hit.group(1)) if hit.groups() else 1))
+                    break
+        now = now or time.time()
+        while self.events and self.events[0][0] < now - self.WINDOW_S:
+            self.events.popleft()
+        out = {kind: 0 for kind, _ in RECEIVER_EVENTS}
+        for _, kind, n in self.events:
+            out[kind] += n
+        return out
+
+
+def log_time(stamp):
+    try:
+        return datetime.datetime.strptime(" ".join(stamp.split()), "%a %b %d %Y %H:%M:%S.%f").timestamp()
+    except ValueError:
+        return None
+
+
 # ---------------------------------------------------------------- the tab
 
 class Performance(Charm):
@@ -207,7 +280,8 @@ class Performance(Charm):
         self.temps, self.load = {"cpu": None, "gpu": None, "battery": None}, None
         self.cpu = CpuLoad()
         self.links = Links()
-        self.pc = None  # Cuff for PC's last /stream answer ({"pc": {...} or None})
+        self.pc = None  # Cuff for PC's last /stream answer ({"pc", "link", "dongle_usb"})
+        self.receiver, self.faults = ReceiverLog(), None
         self.fps_history = collections.deque(maxlen=60)  # (fps, target, dropped) per second
         self.sample_st = None  # `cuff render`'s stand-in for ctx.stats()
         self.sample_pc_state = None
@@ -238,6 +312,7 @@ class Performance(Charm):
             st = self.ctx.stats()
             streaming = bool(st and st.get("scene") == "vrlink")
             self.pc = self._fetch_pc() if streaming else None
+            self.faults = self.receiver.read() if streaming else None
             if streaming and self.ctx.shown:
                 self.links.active.set()
             else:
@@ -269,7 +344,12 @@ class Performance(Charm):
                           "reprojection": {"async": True}, "frame": {"compositor_gpu_ms": 1.76}}
         self.pc = {"pc": {"app": "steam.app.2981220", "fps": 143.9, "target_hz": 144.0, "gpu_ms": 3.96,
                           "cpu_ms": 1.53, "dropped": 0.0, "reprojected": 0.0, "async": True, "motion_active": False,
-                          "motion_enabled": False, "motion_forced": False}}
+                          "motion_enabled": False, "motion_forced": False},
+                   "link": {"connected": True, "estimate": 350.0, "auto": False, "capacity_p10": 225.0,
+                            "bitrate": 350.0, "ping": 2.0, "held": 39, "held_worst_ms": 308.4, "stalls": 0,
+                            "bad_link": 32, "step_downs": 0, "resets": 0, "encoder_late": 0},
+                   "dongle_usb": ["USB 3"]}
+        self.faults = {"retries": 412, "late": 1, "stuck": 0, "errors": 0}
         self.sample_pc_state = "connected"
         self.links.latest = [
             {"kind": "Wi-Fi", "freq": 5785, "mbps": 6.4, "signal": -25, "rate": 720.6, "ping": 3.4, "jitter": 2.3,
@@ -344,6 +424,24 @@ class Performance(Charm):
         else:
             self._draw_local(d, st)
 
+    @staticmethod
+    def _link_line(link, usb):
+        """The PC's view of the link in one line, and whether it's worth a warning."""
+        if not link:
+            return "Link log: needs a newer Cuff for PC", False
+        parts = [f"Video {link['bitrate']:.0f} Mbps" if link.get("bitrate") else "Video –"]
+        p10 = link.get("capacity_p10")
+        if p10 is not None:
+            parts.append(f"link {p10:.0f}+")  # what it carried 90 % of the time
+        parts.append(f"held {link['held'] + link['stalls']}/min")
+        if link.get("step_downs"):
+            parts.append(f"{link['step_downs']} step-downs")
+        slow = [u for u in usb or [] if u and u != "USB 3"]
+        if slow:
+            parts.append(f"dongle on {slow[0]}")
+        over = bool(p10 is not None and link.get("bitrate") and link["bitrate"] > p10)
+        return " · ".join(parts), bool(link["held"] or link["stalls"] or link.get("step_downs") or slow or over)
+
     def _draw_stream(self, d, st):
         tiny = FONTS["clip_small"]
         game = (self.pc or {}).get("pc")
@@ -363,13 +461,17 @@ class Performance(Charm):
                        AMBER if game.get("dropped") else ui.DIM)
         else:
             self._line(d, Y + 26, f"Game stats: {missing}", AMBER)
+        # The link as the PC's driver logs it.
+        if self.pc:
+            line, warn = self._link_line(self.pc.get("link"), self.pc.get("dongle_usb"))
+            self._line(d, Y + 48, line, AMBER if warn else ui.DIM, font=tiny)
         # The links, measured here.
         cols = [16, 80, 110, 154, 196]
         for x, head in zip(cols, ("Link", "Mbps", "Ping ±", "Signal", "Rate")):
-            d.text(s(x, Y + 49), head, font=tiny, fill=ui.DIM)
+            d.text(s(x, Y + 59), head, font=tiny, fill=ui.DIM)
         rows = self.links.latest or [{"kind": "Wi-Fi"}, {"kind": "Dongle"}]
         for r_i, r in enumerate(rows[:2]):
-            y = Y + 59 + r_i * 10
+            y = Y + 69 + r_i * 10
             band = (" 2.4 GHz" if r["freq"] < 3000 else " 5 GHz" if r["freq"] < 5925 else " 6 GHz") if r.get("freq") else ""
             ping = (f"{r['ping']:.1f}±{r['jitter']:.1f}" if r.get("ping") is not None
                     else "–" if r.get("pc") or not self.links.latest else "no PC")
@@ -380,13 +482,17 @@ class Performance(Charm):
             for i, (x, cell) in enumerate(zip(cols, cells)):
                 d.text(s(x, y), cell, font=tiny, fill=ui.FG if busy or i else ui.DIM)
         # The game's framerate over the last minute.
-        self._graph(d, (16, Y + 81, 224, Y + 101), game.get("target_hz") if game else None,
+        self._graph(d, (16, Y + 91, 224, Y + 104), game.get("target_hz") if game else None,
                     empty_text=missing)
         frame = st.get("frame") or {}
-        self._line(d, Y + 104, f"Headset {st.get('display_hz', 0):.0f} Hz · compose "
-                               f"{(frame.get('compositor_gpu_ms') or st.get('gpu_ms') or 0):.1f} ms",
-                   font=tiny)
-        self._system(d, Y + 114, st)
+        faults = self.faults or {}
+        stuck = faults.get("stuck", 0) + faults.get("errors", 0)
+        self._line(d, Y + 107, f"Headset {st.get('display_hz', 0):.0f} Hz · compose "
+                               f"{(frame.get('compositor_gpu_ms') or st.get('gpu_ms') or 0):.1f} ms"
+                               + (f" · retries {faults['retries']}/min" if self.faults else "")
+                               + (f" · stuck {stuck}" if stuck else ""),
+                   AMBER if stuck else ui.DIM, font=tiny)
+        self._system(d, Y + 117, st)
 
     def _draw_local(self, d, st):
         hz = st.get("display_hz") or 0

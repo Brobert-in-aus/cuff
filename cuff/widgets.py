@@ -9,7 +9,8 @@ Cuff's style, works out the touch targets, and runs a scrolling line as its own 
           w.Row([w.Button("go", "Start", style="active"), w.Button("reset", "Reset")], height=32),
       ])
 
-A Button's id comes back to press(); a Tabs' press is "<its id>:<item id>".
+A Button's id comes back to press(); a Tabs' press is "<its id>:<item id>", and a Scrub's
+"<its id>:<step>" (0 at the left).
 Sizes: "tiny", "small", "body", "title", "medium", "big". Colours: "fg", "dim", "green",
 "amber", "red", "blue", or an (r, g, b, a) tuple. Button styles: "normal", "active" (green,
 selected), "accent" (blue), "warn" (amber), "off" (greyed out), or fill=(r, g, b, a).
@@ -80,6 +81,16 @@ class Bar(Node):
         """value and marker 0-1; marker draws a tick (say, the value before a change)."""
         super().__init__(**kw)
         self.value, self.colour, self.marker, self.vertical = max(0.0, min(1.0, value)), colour, marker, vertical
+
+
+class Scrub(Node):
+    height = 14
+
+    def __init__(self, id, value, steps=16, enabled=True, **kw):
+        """A bar to tap along, such as a song's position: value 0-1 is how far along. Its
+        width is split into `steps` touch targets; a touch gives "<id>:<step>", 0 at the left."""
+        super().__init__(**kw)
+        self.id, self.value, self.steps, self.enabled = id, max(0.0, min(1.0, value)), steps, enabled
 
 
 class Image(Node):
@@ -170,11 +181,13 @@ class Layout:
                 x += w + node.gap
         elif isinstance(node, Button):
             self.buttons[node.id] = box
+        elif isinstance(node, Scrub):
+            w = (x1 - x0) / max(1, node.steps)
+            for i in range(node.steps):
+                self.buttons[f"{node.id}:{i}"] = (x0 + i * w, y0, x0 + (i + 1) * w, y1)
         elif isinstance(node, Tabs):
-            n = len(node.items)
-            w = ((x1 - x0) - 4 * (n - 1)) / max(1, n)
-            for i, (item, _) in enumerate(node.items):
-                self.buttons[f"{node.id}:{item}"] = (x0 + i * (w + 4), y0, x0 + i * (w + 4) + w, y1)
+            for (item, _), (a, b) in zip(node.items, ui.spans([lb for _, lb in node.items], x0, x1)):
+                self.buttons[f"{node.id}:{item}"] = (a, y0, b, y1)
         elif isinstance(node, Text) and node.scroll and self.marquee is None:
             self.marquee = (node.text, tuple(round(v) for v in box))
 
@@ -228,6 +241,17 @@ def _draw(img, d, node, pressed, title, layout):
         if node.marker is not None:
             mx = x0 + (x1 - x0) * node.marker
             d.rectangle(s(mx - 0.75, y0 - 3, mx + 0.75, y1 + 3), fill=ui.DIM)
+    elif isinstance(node, Scrub):
+        # A thin track, filled to the value, with a knob there.
+        cy, r = (y0 + y1) / 2, 2
+        d.rounded_rectangle(s(x0, cy - r, x1, cy + r), radius=r * ui.SCALE, fill=ui.BUTTON if node.enabled else ui.DISABLED)
+        if node.enabled:
+            vx = x0 + (x1 - x0) * node.value
+            if node.value > 0:
+                d.rounded_rectangle(s(x0, cy - r, vx, cy + r), radius=r * ui.SCALE, fill=ui.GREEN)
+            touched = pressed is not None and pressed.startswith(f"{node.id}:")
+            k = 5 if touched else 4
+            d.ellipse(s(vx - k, cy - k, vx + k, cy + k), fill=ui.PRESSED if touched else ui.FG)
     elif isinstance(node, Image):
         w, h = round((x1 - x0) * ui.SCALE), round((y1 - y0) * ui.SCALE)
         if node.image is None:

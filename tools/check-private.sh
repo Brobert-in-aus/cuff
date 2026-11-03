@@ -15,15 +15,20 @@ else
 fi
 
 # Files and folders that belong to the private workspace only.
-for f in $(printf '%s\n' "$FILES" | grep -E '^(AGENTS\.md|docs/PROJECT-INFRASTRUCTURE\.md|docs/VALIDATION\.md|docs/handoffs/|media/)|\.(mp3|wav|ogg|flac)$'); do
+for f in $(printf '%s\n' "$FILES" | grep -E '^(AGENTS\.md|docs/PROJECT-INFRASTRUCTURE\.md|docs/VALIDATION\.md|docs/handoffs/|media/|tools/private-words$)|\.(mp3|wav|ogg|flac)$'); do
     echo "private file: $f"
     fail=1
 done
 
-# Words that only belong to the developer's setup (case-insensitive), outside this script.
-PATTERNS='soundboard|frame-stt|charms-private|192\.168\.|GusPC|TheVR|7656119[0-9]+|robertmckinnon|D:\\\\Projects|Steam Frame repo'
-for f in $(printf '%s\n' "$FILES" | grep -v -E '^tools/check-private\.sh$|\.(png|jpg|ico)$|(^|/)uv\.lock$'); do
-    hits=$(grep -n -i -E "$PATTERNS" "$DIR/$f" 2>/dev/null | head -3)
+# Words that only belong to a developer's own setup (case-insensitive): home network
+# addresses and Steam IDs here, and the developer's own names and private projects in
+# tools/private-words beside this script (one extended regex a line). That file stays in the
+# private workspace, so the public copy doesn't list what it keeps out.
+PATTERNS='192\.168\.|7656119[0-9]{10}'
+WORDS=$(dirname "$0")/private-words
+[ -f "$WORDS" ] || WORDS=/dev/null
+for f in $(printf '%s\n' "$FILES" | grep -v -E '^tools/(check-private\.sh|private-words)$|\.(png|jpg|ico)$|(^|/)uv\.lock$'); do
+    hits=$(grep -n -i -E -e "$PATTERNS" -f "$WORDS" "$DIR/$f" 2>/dev/null | head -3)
     if [ -n "$hits" ]; then
         printf '%s\n' "$hits" | sed "s|^|$f:|"
         fail=1

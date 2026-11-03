@@ -1,0 +1,78 @@
+#version 450
+// Stabilisation's per-frame pass (src/stabilise.rs): rebuilds the lookup grid
+// that convert.comp reads, for the view turned by this frame's correction.
+// One invocation per grid point:
+//   its view direction (tangents) -> turned by the rotation -> projected back to
+//   tangents -> the eye's roll undone -> render target UV -> the inverse lens
+//   map, per colour channel -> scanout position.
+// It mirrors lut::Stable::fill, which checks it at startup.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Rays { vec2 rays[]; };
+// [(j * n + i) * 3 + channel]: panel position (eye local, 0..1), -1 off the panel.
+layout(set = 0, binding = 1, std430) readonly buffer Inverse { vec2 inv[]; };
+layout(set = 0, binding = 2, std430) writeonly buffer Lut { vec2 lut[]; };
+layout(set = 0, binding = 3, std430) readonly buffer Params {
+    vec4 rot0;  // rows of the rotation (video frame -> head frame)
+    vec4 rot1;
+    vec4 rot2;
+    vec4 view;  // roll sin, roll cos, render target left and top tangents
+    vec4 scale; // 1 / (right - left), 1 / (bottom - top), eye offset, unused
+    uvec4 info; // grid points, inverse map size, per channel, unused
+} p;
+
+const vec2 INVALID = vec2(-1.0);
+
+// Bilinear read of the inverse lens map; INVALID off the panel.
+vec2 lookup(uint c, vec2 uv) {
+    if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) {
+        return INVALID;
+    }
+    uint n = p.info.y;
+    vec2 g = uv * float(n - 1u);
+    uvec2 ij = min(uvec2(g), uvec2(n - 2u));
+    vec2 f = g - vec2(ij);
+    vec2 a = inv[(ij.y * n + ij.x) * 3u + c];
+    vec2 b = inv[(ij.y * n + ij.x + 1u) * 3u + c];
+    vec2 d = inv[((ij.y + 1u) * n + ij.x) * 3u + c];
+    vec2 e = inv[((ij.y + 1u) * n + ij.x + 1u) * 3u + c];
+    if (min(min(a.x, b.x), min(d.x, e.x)) < 0.0) {
+        return INVALID;
+    }
+    return mix(mix(a, b, f.x), mix(d, e, f.x), f.y);
+}
+
+vec2 panel(uint c, vec2 uv) {
+    vec2 d = lookup(c, uv);
+    return d.x < 0.0 ? INVALID : vec2(p.scale.z + d.x * 0.5, d.y);
+}
+
+void main() {
+    uint k = gl_GlobalInvocationID.x;
+    if (k >= p.info.x) {
+        return;
+    }
+    vec2 ray = rays[k];
+    vec3 dir = vec3(ray.x, -ray.y, -1.0);
+    vec3 r = vec3(dot(p.rot0.xyz, dir), dot(p.rot1.xyz, dir), dot(p.rot2.xyz, dir));
+    if (r.z >= -1e-6) {
+        lut[k * 3u] = INVALID;
+        lut[k * 3u + 1u] = INVALID;
+        lut[k * 3u + 2u] = INVALID;
+        return;
+    }
+    vec2 t = vec2(r.x / -r.z, -r.y / -r.z);
+    vec2 rolled = vec2(t.x * p.view.y - t.y * p.view.x, t.x * p.view.x + t.y * p.view.y);
+    vec2 uv = vec2((rolled.x - p.view.z) * p.scale.x, (rolled.y - p.view.w) * p.scale.y);
+    if (p.info.z != 0u) {
+        lut[k * 3u] = panel(0u, uv);
+        lut[k * 3u + 1u] = panel(1u, uv);
+        lut[k * 3u + 2u] = panel(2u, uv);
+    } else {
+        vec2 g = panel(1u, uv);
+        lut[k * 3u] = g;
+        lut[k * 3u + 1u] = g;
+        lut[k * 3u + 2u] = g;
+    }
+}

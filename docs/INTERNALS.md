@@ -26,7 +26,15 @@ How Cuff works, and why: the findings behind its choices on the Steam Frame.
       PC (four pings every 2 s, while the tab is open), signal (the dongle's own reads 0, so
       its ack signal) and link rate. The PC's address on each link comes from Steam Link's
       command line (`-c <ip>`).
-    - **The headset:** its display rate and compose time, CPU / GPU / battery temperature
+    - **The link as the PC's driver logs it**, also from Cuff for PC (`link` and
+      `dongle_usb` in `/stream`): the video bitrate, the capacity SteamVR measured
+      (`link 225+`: what it carried 90 % of the time), frames held back for the link per
+      minute, and bitrate step-downs. It also warns when the dongle is on USB 2. Amber on
+      any of those, or when the bitrate is above that capacity.
+    - **The headset:** its display rate and compose time, packets Steam Link's client
+      re-requested in the last minute (`retries`) and times its decoder got stuck or hit an
+      unrecoverable error (`stuck`, amber). Those come from its own log,
+      `~/.steam/steam/logs/vrlink.txt`, read as it grows. Then CPU / GPU / battery temperature
       (the hottest `/sys/class/thermal` zone of each kind) and CPU load.
   - **Anything else on the headset:** its framerate, reprojection, an App CPU / App GPU /
     Compositor stack with a tick at one frame's budget, the minute's graph, dropped and
@@ -38,11 +46,13 @@ How Cuff works, and why: the findings behind its choices on the Steam Frame.
     itself, and transfer latency stays 0. Steam Link's own encode / network / decode
     breakdown is only in its client's debug window and in timing snapshots it writes on the
     PC after a hitch (`Steam/logs/vrlink_aftm_*.csv`), never live, so Cuff doesn't show it.
+    The driver's text log (`Steam/logs/driver_vrlink.txt`) is live, and that's where the
+    link line comes from.
 - **Audio** (`charms/audio`). The default output's volume (− and +, 5 % steps) and mute, and
   the real outputs to send sound to (those with a `device.api`: the built-in speakers, a USB-C
   adapter, Bluetooth headphones; filter chains and virtual mics are left out), through pactl.
 - **Settings** (`cuff/settings.py`). Part of the core and pinned to the end of the tab row,
-  drawn as a gear. Four sub-tabs:
+  drawn as a gear. Five sub-tabs:
   - **Place** and **Angle** set where the panel sits: Size, Along arm (from the controller tip
     toward the elbow) and Height (off the wrist); Around (the wrist), Tilt (the top edge away
     from you) and Twist (in its own plane). Each row has − and + (one step), and a bar whose
@@ -68,8 +78,85 @@ How Cuff works, and why: the findings behind its choices on the Steam Frame.
   - **Alerts** switches the buzz, chime, glow on the hand and charging-stopped alert, sends a
     test alert, and opens **Low battery**: each device (headset, controllers, headphones) on or
     off with two levels in 5 % steps (0 is off). Kept in `~/.config/cuff/alerts.json`.
-- **Now playing** (`charms/now-playing`). Album art, title, artist, and buttons for previous,
-  play/pause, next, volume down and volume up.
+  - **Quick** chooses the quick row: its six slots, then every button on offer (the core's
+    and the loaded charms'), with Empty and Defaults (two taps). Tap a slot, then a button
+    for it; one that's already in the row swaps places. Saved at once to
+    `~/.config/cuff/quick.json`.
+  - With five sub-tabs, each is as wide as its label plus a share of the rest
+    (`ui.spans`); sub-tabs whose labels all fit stay equal widths.
+- **Record** (`charms/record`): video of what the headset shows (setup and credits:
+  `docs/RECORDING.md`). Its `charm.toml` has `requires = "~/.local/share/cuff/bin/cuff-recorder"`, so it
+  stays off ("not installed" in Settings > Charms) without the recorder.
+  - **The recorder** is `recorder/` (Rust), from [Framecorder](https://github.com/coah80/framecorder)
+    (MIT, credits in `recorder/README.md`), built for SteamOS 0.6's FFmpeg 8 by
+    `recorder/install.sh`. `recorder.py` runs it as Framecorder's own tab did:
+    `cuff-recorder [--replay N] <args> --control`. Commands go one per line on stdin
+    (`record <file>`, `stop-record`, `clip`, `quit`), and events come back on stdout
+    (`recording <path>`, `saved recording|clip <bytes> <secs> <path>`, `busy recording`,
+    `failed <kind> <why>`). Every clip asked for gets one of those: one asked for within a
+    second of the last gets `failed clip skipped: ...`, which the page doesn't show as an
+    error. Started with `--control` and no `--replay`, it records nothing until `record`.
+  - **Lifecycle:** it stays up while clips are on (the buffer lives in it), and otherwise
+    only for a recording: with clips off, the one started for a recording is told to quit
+    once that's saved. It restarts when its settings change, between recordings, and 5 s
+    after it dies. `PR_SET_PDEATHSIG` sends it SIGINT if Cuff dies, so it finishes its file.
+    It never pauses, so recording works with no game, and Cuff's panel is in the video
+    while you look at it.
+  - **Clip, then record** (the quick action's "both") waits for the clip's reply. The wait
+    is dropped when the recorder exits or restarts, after 30 s, and by a plain Clip, so a
+    stale one can't start a recording later.
+  - **The replay buffer** (`replay.rs`) keeps its time by the clock, for video and audio
+    alike, so with the panels dark (headset off) the mic's audio still ages out. A gap in
+    the video (over 1 s without a frame) is a discontinuity: the next frame is forced to be
+    a keyframe, and a clip never reaches back across a gap that began before its start (it
+    starts at the first keyframe after it). Its memory is also capped at twice what its time
+    should take at the chosen bitrates. Silence is padded into the audio a second at a time;
+    with no file being written, a gap longer than the buffer keeps is skipped, not encoded.
+  - **Logs:** the recorder's stderr goes to `~/.local/state/cuff/record.log`, set aside as
+    `record.log.1` when a start finds it over 1 MB. Its performance CSV (a line a second) goes
+    to `~/.local/state/framecorder/<time>.perf.csv` when there's no recording file to put it
+    next to: the newest 5 are kept, each capped at 2 MB (it starts over past that).
+  - **SteamVR's interfaces** for the headset view source: `IVRCompositor` (_029, _028 or
+    _027, each with its own slots for the Vulkan extension calls, measured on SteamVR 2.18.4),
+    `IVROverlay` (_028, _029 or _027: `FindOverlay` is slot 0 in all), `IVROverlayView_003` and
+    `IVRHeadsetView_001` (the only versions with a known layout). Teardown always goes headset
+    view, then SteamVR, then the GPU device, early errors included.
+  - **Panel access:** it reads the panels through the root-owned panel helper
+    (`~/.local/lib/cuff/cuff-grab`, put there by `install.sh --helper`, with
+    `cap_sys_admin`; Framecorder's `framecorder-grab` works too). Without a helper it
+    records SteamVR's view: 16:9, left eye only.
+  - **Settings** are kept in Framecorder's spelling in `~/.config/cuff/record/settings.json`,
+    with the Cuff Player shortcut's id in `player.json`. They're under config, not cache,
+    so they survive an uninstall.
+    The first time, they're read from Framecorder's `ui.conf`.
+  - **Pages:**
+    - **Record:** the status and its time, Clip, Record/Stop, why something failed, and
+      the newest file.
+    - **Video** and **Audio:** the settings. Video's **Steady** passes `--stabilise
+      light|strong` (the recorder's `stabilise.rs`, a GPU pass that turns the crop against
+      head jitter each frame). Only for one eye read from the panels.
+    - **Watch:** clips and recordings, newest first, with their lengths (`ffprobe`, run on
+      the charm's thread).
+  - **Toasts:** each saved clip or recording gets one, with a buzz. The tab's badge shows
+    the recording time. Its quick-row button (`[quick.record]`) calls `quick_press`.
+  - **Playing (`player.py`):** mpv from Flathub (`io.mpv.Mpv`), whose MPRIS plugin hands it
+    to Now Playing. A window shows in VR only when Steam launched it, so mpv runs from a
+    "Cuff Player" non-Steam shortcut. Cuff adds it once through Steam's client
+    (`SteamClient.Apps.AddShortcut`, then `SetShortcutLaunchOptions` and `RunGame`), and
+    keeps its id in `player.json`. Its launch options play `playlist.m3u`, rewritten before
+    each Play: that video, then the older ones.
+- **Now playing** (`charms/now-playing`).
+  - **The page:** album art, title and artist; where it's up to, with a scrub bar to tap and
+    the time left; −15 s, previous, play/pause, next, +15 s; and volume.
+  - **The source** under the title ("Spotify · 70%") is a button that opens the player
+    page: pick which player to show, or Auto, and the playback speed.
+  - **The MPRIS calls:** the scrub bar is a `Scrub` widget, 16 steps, using `SetPosition`
+    with the track's `mpris:trackid`; skipping is `Seek`; speed is `Rate`, within
+    `MinimumRate`/`MaximumRate`.
+  - **Greyed out:** skipping and the bar while the player can't seek, and the volume
+    buttons without a writable `Volume`.
+  - **Position** is read once a second, but only goes into the state while the page is
+    open, so a playing song doesn't redraw the panel every second behind another tab.
   - **Which player:** any MPRIS player works. Whatever is playing comes first, then paused,
     then the rest. Within each, Spotify comes first: a headless Connect speaker on the
     headset, meaning Spotify's own
@@ -84,18 +171,18 @@ How Cuff works, and why: the findings behind its choices on the Steam Frame.
     two-word label too long for its tab goes on two lines. The source under the title is
     "Spotify", or the player's MPRIS `Identity` ("Chromium", "VLC").
   - **Nothing playing:** the page says so. If Soloist is installed, it adds "Pick "<name>" in
-    the Spotify app", with the name from `~/.config/soloist/env`.
-  - **Volume:** the buttons step the player's MPRIS `Volume` by 5%, separate from the system
-    sink. For a Connect speaker that's the Spotify app's slider. A bar under the buttons and
-    a "· 70%" next to the source show the level. Players without a writable `Volume` ignore
-    them.
+    Spotify", with the name from `~/.config/soloist/env`.
+  - **A picked player** stays shown until it closes, then Auto takes over again.
+  - **Volume:** − and + step the player's MPRIS `Volume` by 5%, separate from the system
+    sink. For a Connect speaker that's the Spotify app's slider. The bar between them and
+    the "· 70%" by the source show the level.
 
 ## The panel
 
 The panel has four rows, top to bottom:
 
 1. **Status bar**: time and batteries. It's never interactive.
-2. **Quick actions**: always shown.
+2. **Quick actions**: always shown; six slots, chosen in Settings > Quick.
 3. **Tabs**: one per charm. Three fit; with more, ‹ and › at the ends of the row page through
    them, three at a time (a short last page keeps the same tab width) (dimmed at the first and last page, with a green dot pointing to the open tab when
    it's on another page).
@@ -136,18 +223,26 @@ tab, or none, is remembered across restarts (`~/.cache/cuff/state.json`).
     If those files are missing, it falls back to SteamVR's `Prop_DeviceIsCharging_Bool`.
   - **The controllers** use SteamVR's `Prop_DeviceBatteryPercentage_Float` and
     `Prop_DeviceIsCharging_Bool`: green with a bolt while charging.
-- **Quick actions.** Six buttons, 34x24 px each. Toggles show their state as a fill;
-  actions only flash when pressed. They're fixed: the same six for everyone, and charms
-  can't add to them. To add one to Cuff itself, add an entry to `ui.QUICK`, a glyph in
-  `ui.glyph`, and a handler in `quick.py` or `app.py`.
+- **Quick actions** (`cuff/quickrow.py`). Six slots, 34x24 px each, filled from the
+  buttons the core and charms offer (Settings > Quick; the default is the six below). An
+  empty slot is blank and untouchable. Toggles show their state as a fill; actions only
+  flash when pressed.
+  - **A charm's button** is declared in its `charm.toml` (`[quick.<id>]`, a label and a
+    glyph). Its look comes from the charm's `quick(button)` on each redraw (a glyph, a style
+    of normal, on, alert, busy, dim or off, and an optional short text), and a press goes to
+    `press("quick:<id>")` on the charm worker. In the row it's `"<charm id>:<id>"`.
+  - **A new charm's button is offered, not added**, so it never pushes one of yours out. A
+    chosen button whose charm is off keeps its slot, greyed out.
+  - **A core button:** an entry in `quickrow.CORE` and `core_look`, a glyph in `ui.glyph`,
+    and a handler in `quick.py` or `app.py`.
 
   | Button | What it does | How |
   | --- | --- | --- |
   | Dictation (speech bubble) | Push-to-talk: tap, talk, tap. The text is typed into the focused window: a game, the desktop or Steam. Red while listening, amber while transcribing; dimmed when Steam's text input isn't reachable. | `pw-record`, then a PC server if configured, else the headset's own model; typed with Steam's `ControllerKeyboardSendText` (see "Dictation" below) |
   | Mic | Mutes the physical mic (the profile's `real_mic`). Red with a slash while muted. Anything mixed into a virtual mic downstream of it still gets through. | `pactl set-source-mute <real_mic> toggle`, state polled every 2 s |
   | Passthrough (eye) | SteamVR Room View on/off. Teal while on, following SteamVR's real state; greyed out if SteamVR's mailbox isn't there or didn't respond. | SteamVR's mailbox; see "Passthrough" below |
-  | Recenter (target) | Resets the forward direction. | `vrcmd --recenter` |
-  | Keyboard | Opens SteamVR's keyboard for the visible window: a game or desktop (gamescope) or the Steam menu. That window gets the typing, like the "show keyboard" button SteamVR draws under it. With no window visible the button is greyed out and does nothing (checked every 0.5 s). The panel hides while any keyboard is open (see below). | `ShowKeyboardForOverlay` on `valve.steam.desktopgame.N` (if visible) or `valve.steam.gamepadui.main`; state from `VREvent_KeyboardOpened_Global` / `KeyboardClosed_Global` |
+  | Recenter (target) | Resets the forward direction and makes a new chaperone bubble where you stand, as holding the Steam button does, so a popped bubble's forced passthrough ends. Room View blinks on for 0.3 s to do it (skipped while Room View is on by choice). | `seated_and_standing_position_reset` to SteamVR's `vrcompositor_systemlayer` mailbox (`vrcmd --recenter` if that fails), then Room View on and off: turning it on clears the bubble ("Clearing chaperone bubble because room view for scene apps was enabled") and turning it off creates one ("Creating chaperone bubble because room view was turned off…"). The reset alone, by either route, left the old bubble popped. |
+  | Record (dot, a stop square while recording) | The Record charm's button: saves a clip, or starts or stops a recording, as its Quick action setting says. Red while recording; greyed out without the recorder. It replaced the SteamVR keyboard button. | `[quick.record]` in the Record charm; `quick_press` on the charm worker |
   | Screenshot (camera) | Saves a stereo screenshot to `~/Pictures/Frame screenshots/` (`*-vr.png` and `*-preview.png`) 3 s after the tap (the button counts down 3, 2, 1 in amber), so you can turn the panel out of view; the wrist buzzes as it's taken. | OpenVR `TakeStereoScreenshot` on the overlay thread; `vrcmd --screenshot` did nothing on the Frame |
 
 - **Scrolling line.** A charm can mark one line to scroll (`marquee()`; Now playing's
@@ -166,12 +261,13 @@ tab, or none, is remembered across restarts (`~/.cache/cuff/state.json`).
 
 | Piece | Role |
 | --- | --- |
-| `cuff/app.py` | The OpenVR loop: placement, show-on-look, touch, the sphere, haptics, and the quick actions that need OpenVR (passthrough, keyboard, screenshot). The render thread and the charm-press worker. `--debug` prints poses and touch depth. |
+| `cuff/app.py` | The OpenVR loop: placement, show-on-look, touch, the sphere, haptics, and the quick actions that need OpenVR (passthrough, screenshot); charms' quick buttons go to their charm. The render thread and the charm-press worker. `--debug` prints poses and touch depth. |
 | `cuff/wrist.py` | Where the panel sits on the wrist and how it fades in (clean-room, see below) |
 | `cuff/vr.py` | The arm64 `libopenvr_api` shim, pose maths, hand tip poses (`Hands`), double-buffered layers (`Layer`) and SteamVR's mailbox (`Mailbox`) |
 | `cuff/ui.py` | Layout (240x230 logical px open, 240x88 collapsed, drawn at 2x with Pillow and Noto Sans), the fixed rows, the tab pager, icons as shapes, hit-testing, and the drawing helpers charms use |
 | `cuff/charm.py` | The `Charm` base class, the loader, and the guard around every charm call |
 | `cuff/settings.py` | The Settings tab (a built-in charm) |
+| `cuff/quickrow.py` | The quick row: the chosen slots (`quick.json`), the buttons on offer, and how each looks |
 | `cuff/services.py` | Toasts and frame timing, for every charm |
 | `cuff/pc.py` | Finds Cuff for PC from its announcements, remembers it, and says whether it's there |
 | `cuff/placement.py` | The panel's size and placement: slider definitions, pending and applied values, `placement.json` |
@@ -182,7 +278,9 @@ tab, or none, is remembered across restarts (`~/.cache/cuff/state.json`).
 | `cuff/steam.py` | Steam's client API over its CEF debugger, for typing |
 | `cuff/status.py` | Battery readings for the status bar |
 | `cuff/config.py` | `config.toml`, the headset profile (the Frame's paths and mic node by default) and Cuff's directories |
-| `pc-server/` | Cuff for PC: dictation (`server.py`), the stream's PC side (`stream.py`), the announcement (`beacon.py`), and its Windows install (`install.ps1`, `firewall.ps1`) |
+| `pc-server/` | Cuff for PC: the desktop app (`app.py`, `app.html`, `appapi.py`; see docs/PC-APP.md), dictation (`server.py`), the stream's PC side (`stream.py`), the announcement (`beacon.py`), the headset over SSH (`frame.py`, `videos.py`), and its Windows install (`install.ps1`, `firewall.ps1`) |
+| `cuff/remote.py` | Settings and videos for Cuff for PC: `python -m cuff.remote dump / apply / videos`, run over SSH; `apply` sends Cuff SIGHUP to reload |
+| `cuff/atomic.py` | Saves the JSON settings and state files atomically (temporary file, fsync, rename), for Cuff and `cuff.remote` alike |
 | `cuff.service` | The systemd user service |
 
 - **Placement** (`wrist.py`). The panel sits on the back of the left wrist, relative to
@@ -274,13 +372,17 @@ SteamVR calls passthrough "Room View".
   with `_forsceneapps` (over a running game); the `_forsceneapps` one alone did nothing in
   the Steam menu. The compositor log answers `[systemlayer] Clearing chaperone bubble
   because room view for scene apps was enabled`.
-  - The vtable layout (0 register, 1 unregister, 2 send) was found by probing SteamVR
-    2.18.4 on the Frame. `vr.Mailbox` records that version.
+  - The vtable layout (0 register, 1 unregister, 2 send, 3 read) was found by probing
+    SteamVR 2.18.4 on the Frame. `vr.Mailbox` records that version. Read is
+    `(handle, buf, size, &needed)` and returns a reply sent to `returnAddress`; sending
+    `{"type": "get_debug_commands", "returnAddress": …, "message_id": 1}` to a mailbox lists
+    the commands it takes.
 - **It's checked, since it's undocumented.** At startup Cuff opens the mailbox once and logs
-  the runtime version, noting when it isn't the tested one. If the interface is missing or
-  registering fails, the button is greyed out. After each press, Room View's state (below)
-  must follow within 4 s, or the button is greyed out for the rest of the run, with the
-  reason in the log.
+  the runtime version, noting when it isn't the tested one. If the interface is missing,
+  registering fails or a send is refused, the button is greyed out. After each press, Room
+  View's state (below) should follow within 4 s. If it doesn't, the log says so and the
+  button shows what SteamVR reports. (It used to grey out for the rest of the run, which on
+  2026-10-31 took out a turn-off that had worked.)
 - **The button's state** (`vr.RoomView`) comes from two places, depending on whether a game
   (a scene app, Steam Link's `vrlink` included) has focus.
   - **No game:** SteamVR's `camera/enableConstructRoomView` setting. It's written as `true`
@@ -290,10 +392,19 @@ SteamVR calls passthrough "Room View".
     game. So the state comes from the compositor's log
     (`~/.local/share/Steam/logs/vrcompositor.txt`), whose system layer logs "room view for
     scene apps was enabled" and "room view was turned off". Cuff reads the log through on
-    start, and again when a new SteamVR run starts a new one, then follows it.
+    start, and again when a new SteamVR run starts a new one, then follows it. The
+    turned-off line appears only when the compositor is forcing Room View (a popped
+    chaperone bubble), not after a plain turn-off. So a press SteamVR accepted counts as the
+    state until the log says otherwise.
   - Before this, a press in a game always asked for "off" and was greyed out.
   - **When it's read:** every 2 s, every 0.25 s while a press awaits confirmation, and on
     `CameraSettingsHaveChanged`. `VREvent_RoomViewShown`/`Hidden` never arrived.
+  - **Recenter's blink** logs "enabled" too. So when the blink turns Room View off, the log
+    is read through before that's noted, and an "enabled" line within 1 s after is ignored;
+    otherwise the next read flipped the button back to on with Room View off. A press during
+    the blink turns Room View on (it was off before the blink) and cancels the blink's
+    turn-off. Both messages are always sent, and a press or blink counts if SteamVR accepted
+    either.
 - **Routes that don't work:**
   - Writing that setting: it changes, but the compositor only reports it, so Room View
     doesn't follow.
@@ -337,14 +448,10 @@ The user chose hiding.
 The layers still set `VROverlayFlags_VisibleInDashboard`, so the panel stays up over the
 Steam menu.
 
-**Keyboard with no window to attach to:** the button is greyed out. Two things were tried
-first:
-- **The panel as the keyboard's target.** It flickered, because the panel swaps twins and
-  hides while a keyboard is open.
-- **An invisible anchor overlay**, forwarding the typing to the focused app through
-  Steam.
-
-The user chose to disable the button instead. Text goes through `ControllerKeyboardSendText`; backspace,
+**A keyboard button** was on the quick row until the record button replaced it. It opened
+SteamVR's keyboard for the visible window, and was greyed out with no window to attach to.
+Making the panel the keyboard's target flickered, because the panel swaps twins and hides
+while a keyboard is open. Dictation types through `ControllerKeyboardSendText`; backspace,
 enter and tab go through as `ControllerKeyboardSetKeyState` presses.
 
 ## Dictation
@@ -362,8 +469,10 @@ enter and tab go through as `ControllerKeyboardSetKeyState` presses.
     minutes, giving the memory back.
 - **Typing.** `SteamClient.Input.ControllerKeyboardSendText` in Steam's SharedJSContext,
   over its CEF remote debugger (127.0.0.1:8080). It reaches games, the nested desktop and
-  Steam itself. It's undocumented, so Cuff checks once at startup that the call exists, and
-  dims the button if it doesn't.
+  Steam itself. It's undocumented, so Cuff checks at startup that the call exists, and
+  dims the button if it doesn't. A Steam call that fails later (the debugger unreachable, or
+  the expression throwing, which the debugger reports as `exceptionDetails`) forgets that
+  check: the button dims again until the call answers (asked every 10 s).
 - **Your own tool instead.** `[dictation] command` runs an external push-to-talk command:
   it's stopped with `SIGUSR1`, types the text itself, and reports
   `{"phase": "listening" | "transcribing" | "done" | "error" | "idle", "text"}` JSON lines on
@@ -403,27 +512,102 @@ enter and tab go through as `ControllerKeyboardSetKeyState` presses.
 
 ## Cuff for PC
 
-- **Finding it.** It broadcasts `{"app": "cuff-pc", "port", "name", "pairing"}` every 2 s on UDP
-  8766 from each of the PC's addresses (`pc-server/beacon.py`); the headset listens
-  (`cuff/pc.py`) and uses the newest address heard in the last 10 s, so it's found over home
-  Wi-Fi and over the dongle link alike.
-- **Pairing** (`pc-server/pairing.py`). `pair.ps1` opens pairing for 5 minutes (from the PC
+- **Finding it.** It broadcasts `{"app": "cuff-pc", "id", "port", "name", "pairing", "typing"}`
+  every 2 s on UDP 8766 from each of the PC's addresses on networks Windows calls Private or
+  Domain, and on the dongle's 10.35.78.0/24, which Windows calls Public (`pc-server/beacon.py`;
+  the categories come from `Get-NetConnectionProfile` once a minute, and if that fails it
+  announces everywhere, as before). `id` is the PC's own, random and kept with its tokens. The
+  addresses come from `getaddrinfo(b"..localmachine")`, which works for a computer name that
+  isn't ASCII. The headset listens (`cuff/pc.py`) and keeps addresses per PC id, but uses one
+  only once the PC there has proved it holds this headset's token (a signed `GET /health`
+  whose answer is signed and names the id; redone once a minute), then the newest such address
+  heard in the last 10 s, so it's found over home Wi-Fi and over the dongle link alike. A
+  malformed announcement is ignored.
+- **The desktop app** (`pc-server/app.py`, its page `app.html` and API `appapi.py`): see
+  docs/PC-APP.md. The page lists the paired headsets by a short hash of their token, each
+  with when it was last heard from (in memory: a paired headset's once-a-minute check of each
+  address is its hello, `cuff/pc.py`). `--no-beacon` runs a second copy that doesn't announce
+  itself, for testing.
+- **Settings from the PC** (`cuff/remote.py`). Cuff takes `SIGHUP` as "settings changed": the
+  overlay loop reloads placement (`Placement.reload`), alerts (`Prefs.reload`) and the quick
+  row (`quickrow.reload`), and calls each charm's `reload()` on a thread of its own. Charms on
+  or off and the tab order (`charms.json`'s `order`, which wins over `config.toml`'s `tabs`)
+  wait for a restart. Its output carries `"api": 1`, a protocol version for Cuff for PC to
+  compare.
+- **Saving settings.** Cuff and `cuff.remote` both write the JSON files under
+  `~/.config/cuff` (and Cuff's cache) through `cuff/atomic.py`: a temporary file in the same
+  folder, flushed to disk, then renamed over the old one, so a crash mid-write can't leave
+  half a file. A file that's there but can't be read is logged, and the defaults are used.
+- **Pairing** (`pc-server/pairing.py`). `pair.ps1` (or the app page) opens pairing for 5 minutes (from the PC
   itself only; running it again while open keeps the request) and asks for the code in a
   "Pair with Cuff" window. The headset makes up a 4-digit code, shows it as an alert that
   stays pinned above the panel until pairing ends (`Toasts.pin`), then alerts again with
-  "Paired with <PC>" or "Pairing closed: run pair.ps1 on <PC> again". It asks to pair
-  with a random request id; the code typed on the PC (from the PC itself only) pairs only the
-  request carrying it, so another device asking at the same time can't, without the code on
-  the wrist. The headset then collects a token (kept in `~/.config/cuff/pc-pairing.json`, mode
-  600) and sends it as a bearer token. Every request but `/health` and pairing needs one; a
-  rejected upload is read before the 401 so the client sees the answer.
+  "Paired with <PC>" or "Pairing closed: run pair.ps1 on <PC> again".
+  - **The code never crosses the network.** The headset asks with a random request id and its
+    half of a SPAKE2 exchange keyed by the code (RFC 3526's 2048-bit group; both ends carry the
+    same few lines). When the code is typed on the PC (from the PC itself only), the PC answers
+    each waiting request with its half and a new token sealed with the key, and waits up to
+    10 s. The headset collects that from the address it asked from (`/pair/result`), opens it
+    only if it was made with its code, and proves so (`/pair/finish`); only then is the token
+    paired and the PC window says so. A device that doesn't know the code can't pose as the PC
+    (the headset gives up after 3 answers made with another code) or pair in its place.
+  - **Requests:** each address may ask once a second and hold 2 requests; with 8 waiting, a
+    new one pushes out the oldest rather than being refused.
+  - **Tokens** are kept in `~/.config/cuff/pc-pairing.json`, mode 600, under the PC's name,
+    with `"@ids": {<PC id>: <PC name>}` saying which PC each belongs to. One under the name
+    only (an older Cuff's, or written by the PC app over SSH) is tried with the PC of that name
+    and bound to its id the first time that PC proves it holds it; once bound, the name is no
+    use to another id.
+  - **Signed, not sent.** The token never crosses the network after pairing. Every request but
+    `/health` and pairing is signed with it: `Authorization: Cuff v=1, id=<headset id>,
+    ts=<unix time>, nonce=<random>, mac=<hex HMAC-SHA256(token, method
+path?query
+ts
+nonce
+
+    sha256(body))>`, the headset id being the short hash the app page shows. The PC refuses a
+    request more than 60 s off its clock, or a nonce it has seen. It signs its answer to a
+    signed request (`X-Cuff-Mac`: HMAC-SHA256(token, `response
+nonce
+status
+sha256(body)`)),
+    and the headset acts on no answer that isn't signed, so a device copying the announcement
+    gets neither the token, nor dictation audio, nor a way to type on the headset. Charms and
+    dictation get a marker from `pc_headers()` instead of the token; `cuff/pc.py` signs marked
+    requests in urllib as they leave, only to a checked address. `STT_TOKEN`, set by hand on
+    both ends, also works as a bearer token. A signed upload is read before the 401, so the
+    client sees the answer.
+  - **From the PC itself**, routes that trust 127.0.0.1 (`/pair/open`, `/pair/confirm`, and
+    `/stream`, `/transcribe`, `/typing/next` without a signature) need the app page's guard too:
+    a `Host` of 127.0.0.1 or localhost and `X-Cuff-App: 1`; JSON bodies must be sent as
+    `application/json`. So a web page in a browser on the PC can't use them.
+  - **Clocks:** the headset's and PC's clocks must agree to within a minute (both normally set
+    themselves); otherwise the PC answers 401 and says so.
 - **Firewall** (`pc-server/firewall.ps1`): TCP 8765 on Private networks, and on Public ones
-  only from 10.35.78.0/24, the Frame's dongle subnet, which Windows classes as Public.
+  only from 10.35.78.0/24, the Frame's dongle subnet, which Windows classes as Public. It isn't
+  tied to the dongle's adapter: its name varies, and it may not be plugged in when the rule is
+  made. A public network using that subnet could reach the port, but past `/health` and
+  pairing (which needs pair.ps1 open and the code) everything needs a signature.
 - **Dictation's pins.** `onnxruntime-gpu` 1.24 with cuDNN 9.10: ORT 1.31 targets CUDA 13, which
   has no Windows wheels, and cuDNN 9.27 fails with `CUDNN_BACKEND_API_FAILED`, after which ORT
   silently runs on the CPU. Without an NVIDIA GPU it runs on the CPU too, slower but working.
 - **Stream stats** (`pc-server/stream.py`): OpenVR as a background app on the PC (it never
   starts SteamVR), sampled once a second: the game's app key, framerate and target, GPU and
   CPU milliseconds per frame, dropped and reprojected frames, and reprojection flags.
+- **Link log** (`pc-server/linklog.py`): `<Steam>/logs/driver_vrlink.txt` read as it grows,
+  once a second. On start it reads the last 512 KB for the latest estimate. A shrunk or
+  rewritten file (SteamVR rotates it at start) is read from the top. Lines used:
+  `Link BW: Est`, `Link BW hist` (5 Mbit/s bins; Cuff reports the 10th percentile),
+  `THROTTLE EVENT: <µs>` (1 s or more counts as a stall), `Bad link event: ... <a> mbit/s ->
+  <b> mbit/s, ping <ms>`, `Connection active|inactive`, `Reset video stream` and the encoder's
+  perf warnings. The estimate and bitrate are dropped after 2 minutes without a new line.
+  The formats came from SteamFrame Advanced Options (MIT) and were checked against this PC's
+  logs.
+- **Dongle USB speed** (`pc-server/usbdongle.py`): the USB hub IOCTLs (no admin) for Valve
+  `28DE:2432`. The V2 query's operating flags tell USB 3 from USB 2, because the EX query
+  alone can call a SuperSpeed device High-Speed. Checked at most every 30 s. Ported from
+  SteamFrame Advanced Options (MIT).
 - `uv run server.py --selftest clip.wav` times one transcription; `--stats-only` skips the
-  speech model; `uv run stream.py` prints one stream answer.
+  speech model; `uv run stream.py` prints one stream answer; `python linklog.py [log]`
+  replays a driver log (counting back from its last line); `python usbdongle.py` prints the
+  dongle's speed.

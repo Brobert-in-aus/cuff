@@ -6,7 +6,9 @@ Only while SteamVR runs on the PC; this never starts it.
 
 Steam Link's own encode / network / decode breakdown isn't published anywhere live (only in
 its client's debug window and in timing snapshots it writes after a hitch), so the headset
-measures the links itself instead.
+measures the links itself. What the PC does add about the link: the driver's own log of it
+(linklog.py: its estimate and measured capacity, held frames, bitrate step-downs) and which
+USB speed the dongle got (usbdongle.py).
 
   python stream.py        print one answer (a check while streaming)
 """
@@ -15,8 +17,12 @@ import sys
 import threading
 import time
 
+import linklog
+import usbdongle
+
 SAMPLE_S = 1.0
 RETRY_S = 10.0
+USB_EVERY_S = 30.0
 
 
 # ---------------------------------------------------------------- the PC's compositor
@@ -92,13 +98,31 @@ class PcMonitor(threading.Thread):
 
 
 MONITOR = PcMonitor()
+_usb = {"at": None, "value": None}
+
+
+def dongle_usb():
+    """Each dongle's USB speed (usbdongle.dongles), checked at most every USB_EVERY_S."""
+    now = time.monotonic()
+    if _usb["at"] is None or now - _usb["at"] > USB_EVERY_S:
+        try:
+            _usb["value"] = usbdongle.dongles()
+        except OSError:
+            _usb["value"] = None
+        _usb["at"] = now
+    return _usb["value"]
+
+
+def start():
+    MONITOR.start()
+    linklog.MONITOR.start()
 
 
 def snapshot():
-    return {"pc": MONITOR.latest}
+    return {"pc": MONITOR.latest, "link": linklog.MONITOR.latest(), "dongle_usb": dongle_usb()}
 
 
 if __name__ == "__main__":
-    MONITOR.start()
+    start()
     time.sleep(2.5)
     print(json.dumps(snapshot(), indent=1))

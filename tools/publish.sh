@@ -14,6 +14,9 @@
 #   "Cuff (<this commit>)" unless -m gives one. Nothing changed, nothing committed. It pushes
 #   only with --push.
 #
+# Just the public copy, into an empty folder (for the Windows installer, pc-server/installer):
+#   sh tools/publish.sh --stage <empty dir> <github owner>
+#
 # Why not this repo's history: it holds code from before Cuff's clean-room rewrite (from a
 # GPL-3.0 project) and the developer's own network details. The public history starts at the
 # first publish, and update messages never copy this repo's commit messages.
@@ -21,6 +24,7 @@ set -eu
 usage() {
     echo 'usage: publish.sh <out dir> <github owner> ["Author <email>"]' >&2
     echo '       publish.sh --update <public clone> [-m "message"] [--push]' >&2
+    echo '       publish.sh --stage <empty dir> <github owner>' >&2
     exit 1
 }
 
@@ -33,9 +37,9 @@ VERSION=$(git describe --tags --always)
 build() {
     git archive HEAD | (cd "$1" && tar -xf -)  # (a "C:" path given to tar -C reads as a remote host)
     # The private workspace's files (the project bootstrapper's, local media, and the
-    # developer's validation log).
+    # developer's validation log and own words for check-private.sh).
     rm -rf "$1/AGENTS.md" "$1/docs/PROJECT-INFRASTRUCTURE.md" "$1/docs/handoffs" "$1/media" \
-        "$1/docs/VALIDATION.md"
+        "$1/docs/VALIDATION.md" "$1/tools/private-words"
     # The public repo's own address.
     for f in get-cuff.sh README.md; do
         sed -i "s|github.com/OWNER/cuff|github.com/$2/cuff|g; s|githubusercontent.com/OWNER/cuff|githubusercontent.com/$2/cuff|g" "$1/$f"
@@ -45,7 +49,19 @@ build() {
         exit 1
     fi
     sh "$ROOT/tools/check-private.sh" "$1"
+    # Which Cuff this is. install.sh copies it to the headset, where --status and Cuff for PC
+    # read it, so an install from the public repo (get-cuff.sh) knows its version too.
+    echo "$VERSION" > "$1/VERSION"
 }
+
+if [ "${1:-}" = "--stage" ]; then
+    [ $# -eq 3 ] || usage
+    mkdir -p "$2"
+    [ -z "$(ls -A "$2")" ] || { echo "$2 isn't empty" >&2; exit 1; }
+    build "$(cd "$2" && pwd)" "$3"
+    echo "Public copy of $VERSION in $2."
+    exit 0
+fi
 
 if [ "${1:-}" = "--update" ]; then
     CLONE=${2:-}

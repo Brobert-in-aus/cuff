@@ -107,16 +107,37 @@ class Dictation:
         self.alive = None  # PC servers that answered the last probe (None: not probed yet)
         configured = bool(self.cmd) or bool(SERVERS) or LOCAL or pc is not None
         self.state = {"phase": "idle", "text": "Tap to dictate", "configured": configured}
+        self._checking = threading.Lock()  # held while a check waits for Steam's text input
         if configured and not self.cmd:
             # Typing goes through Steam's undocumented text-input call: check it once.
+            self.recheck_typing()
+
+    def recheck_typing(self):
+        """Check Steam's text input again in the background (at startup, and after a Steam call
+        failed), unless a check is already waiting for it."""
+        if self._checking.acquire(blocking=False):
             threading.Thread(target=self._check_typing, daemon=True, name="dictation-check").start()
 
     def _check_typing(self):
-        if not steam.typing_ok():
-            print("dictation: Steam's text input (SteamClient.Input.ControllerKeyboardSendText) isn't "
-                  "reachable; greying the button out", file=sys.stderr, flush=True)
-            self.state = {**self.state, "configured": False}
-            self.on_change()
+        try:
+            self._wait_for_typing()
+        finally:
+            self._checking.release()
+
+    def _wait_for_typing(self):
+        """Grey the button out while Steam's text input isn't reachable, and back once it is:
+        at boot Cuff can start before Steam's interface, so keep asking until it answers."""
+        if steam.typing_ok():
+            return
+        print("dictation: Steam's text input (SteamClient.Input.ControllerKeyboardSendText) isn't "
+              "reachable yet; greying the button out until it is", file=sys.stderr, flush=True)
+        self.state = {**self.state, "configured": False}
+        self.on_change()
+        while not steam.typing_ok():
+            time.sleep(steam.RECHECK_S)
+        print("dictation: Steam's text input is reachable now", flush=True)
+        self.state = {**self.state, "configured": True}
+        self.on_change()
 
     def _set(self, phase, text):
         self.state = {**self.state, "phase": phase, "text": text}

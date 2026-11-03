@@ -8,3 +8,8 @@ permissions = []  # MPRIS over the session D-Bus
 [tab]
 label = "Now Playing"
 
+
+# A play/pause button users can put on the quick row (Settings > Quick).
+[quick.play-pause]
+label = "Play/pause"
+glyph = "play"

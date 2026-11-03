@@ -14,7 +14,9 @@ MIT licensed (`LICENSE`).
   including whether a battery pack is keeping up. AirPods need LibrePods: see
   [AirPods battery](docs/AIRPODS.md).
 - **Quick actions:** dictation (talk, and the text is typed into the selected dialogue box), mic mute,
-  passthrough, recenter, the SteamVR keyboard, and a screenshot (on a three second countdown).
+  passthrough, recenter, record (a clip, or a recording, with the Record charm), and a
+  screenshot (on a three second countdown). Choose which six show, and in what order, in
+  Settings > Quick; charms can offer more, such as Now Playing's play/pause.
 - **Tabs:**
   - **Now Playing**: what's playing and its controls, from any media player (whatever is
     playing comes first). It becomes **Spotify** while the headset is your Spotify speaker (Soloist API key required).
@@ -22,6 +24,8 @@ MIT licensed (`LICENSE`).
   - **Timer**: a countdown, a stopwatch, and (if you want one) a reminder to take a break.
   - **Performance**: how a game is running. While streaming from a PC over Steam Link it
     shows the game's framerate and the state of both links (Wi-Fi and the dongle, Cuff for PC required).
+  - **Record**: save a clip of the last few seconds, start and stop a recording, and watch
+    them in the headset. See [Recording](docs/RECORDING.md).
   - **Settings** (the gear): where the panel sits on your wrist, which charms run, and how
     alerts get your attention.
 - **Alerts:** a timer going off, a break reminder, the headset no longer charging (because your external battery pack went flat), or a
@@ -54,22 +58,48 @@ curl -fsSL https://raw.githubusercontent.com/Brobert-in-aus/cuff/main/get-cuff.s
 
 This installs Cuff for your user (`~/.local/share/cuff`) and starts it with SteamVR from
 then on. It also downloads the on-headset speech model (about 650 MB) used for dictation
-away from your PC. To update, run it again. The uninstall command is at the top of
-`install.sh`.
+away from your PC.
+
+Then it asks about the optional parts, for the Record tab:
+
+- **The recorder.** It builds on the headset in a few minutes, installing Rust for you if
+  needed.
+- **The panel helper,** which lets recordings read the panels themselves. It asks for your
+  password once.
+- **mpv,** to watch recordings in the headset.
+
+To choose up front, add options: `... | sh -s -- --all`, or `--only-cuff`, `--recorder`,
+`--helper` or `--player`.
+
+- **Update:** run it again.
+- **See what's installed:** `--status`.
+- **Remove it:** `--uninstall`. Settings and videos stay; add `--purge` for settings too.
 
 ### On your PC (Windows)
 
-Cuff for PC runs at logon. It handles dictation on your GPU, and reports the game's side of
-a Steam Link stream to the Performance tab.
+Cuff for PC is a desktop app that runs at logon, in the tray. It handles dictation on your
+GPU and reports the game's side of a Steam Link stream to the Performance tab. Its window
+can also:
+
+- install and update Cuff on the headset over your network;
+- download your clips and recordings, by hand or automatically;
+- change all of Cuff's settings with a mouse and keyboard;
+- type on the headset from the PC keyboard, or send it the clipboard (Ctrl+Alt+V);
+- show how good the connection is, over the dongle and your network, and while streaming.
+
+To set it up:
 
 1. Install [uv](https://docs.astral.sh/uv/): `winget install --id=astral-sh.uv -e`.
 2. Get this repo (download it as a zip, or `git clone`), then run:
    `powershell -ExecutionPolicy Bypass -File pc-server\install.ps1`.
-   It asks for admin once to add its firewall rules, starts the app, and then pairs your
-   headset: put the headset on, and type the 4-digit code your wrist shows into the **Pair
-   with Cuff** window that opens on the PC.
+   It asks for admin once to add its firewall rules, then starts the app and opens its
+   window.
+3. In **Headset setup**, connect to the headset and click **Install**. This installs Cuff and
+   pairs it with the PC. The page explains turning on the headset's SSH the first time.
 
-To pair again later (a new headset, or after removing one), run `pc-server\pair.ps1`.
+Open it later from the Start menu (**Cuff for PC**) or the tray icon. See
+[docs/PC-APP.md](docs/PC-APP.md) for what each page does. Pairing by code (the
+4-digit code on the wrist) is on the Overview page, or `pc-server\pair.ps1`.
 Dictation on the PC is fastest with an NVIDIA GPU. On other GPUs it falls back to the CPU,
 which still works but is slower.
 
@@ -91,13 +121,16 @@ The gear tab:
 - **Alerts:** switch the buzz, chime, glow and charging alert on or off, and set each
   device's low battery levels.
 
-Everything else lives in `~/.config/cuff/config.toml`, which is optional. See
-`cuff/config.py` for the options.
+The same settings, plus the quick row, Record's settings and the tab order, are on Cuff
+for PC's **Cuff settings** page. Everything else lives in `~/.config/cuff/config.toml`, which
+is optional. See `cuff/config.py` for the options.
 
 ## Privacy and security
 
 - **Pairing:** Cuff for PC answers only a paired headset. Pairing needs a code you type on
-  the PC itself.
+  the PC itself, or the headset's SSH login.
+- **SSH:** Cuff for PC reaches the headset with a key of its own. Your headset password is
+  used once to add that key, and is never stored. Its window answers only the PC itself.
 - **Firewall:** it listens on TCP 8765 on your home network, and on the Frame's dongle link
   only for the dongle's own subnet.
 - **Data:** nothing leaves your network. Dictation runs on your PC or headset, and Cuff
@@ -115,4 +148,6 @@ Everything else lives in `~/.config/cuff/config.toml`, which is optional. See
 - [Writing charms](docs/CHARMS.md): the charm API, widgets, permissions and settings.
 - [How Cuff works](docs/INTERNALS.md): the overlay, touch, passthrough, overlay depth,
   dictation and the bundled charms in detail.
+- [Recording](docs/RECORDING.md), [AirPods battery](docs/AIRPODS.md) and
+  [Spotify on the headset](docs/SPOTIFY.md): setting up the extras.
 - [Roadmap](docs/ROADMAP.md): what's planned next.

@@ -1,8 +1,8 @@
 """Cuff: a standalone OpenVR overlay on the left wrist.
 
 It sits on the back of the left wrist (an offset from the left hand's tip pose) and fades in
-as it turns to face the HMD (wrist.py). The status bar and quick-action row are fixed;
-below them each charm is a tab. A small sphere marks a poke point 60 mm ahead of the right
+as it turns to face the HMD (wrist.py). The status bar and the quick row (buttons chosen in
+Settings > Quick, quickrow.py) are on every page; below them each charm is a tab. A small sphere marks a poke point 60 mm ahead of the right
 controller's tip; touching the panel with it presses buttons.
 
   python -m cuff                         run until SteamVR quits (the systemd service restarts it)
@@ -13,14 +13,16 @@ import json
 import math
 import os
 import queue
+import signal
 import subprocess
 import sys
 import threading
 import time
 
 from . import charm as charms
-from . import config, ui
+from . import config, quickrow, steam, ui
 from . import chime
+from .atomic import atomic_write_json
 from .dictation import Dictation
 from .quick import Quick
 from .pc import Pc
@@ -29,6 +31,10 @@ from .services import Services
 STATE_FILE = os.path.join(config.CACHE_DIR, "state.json")
 SCREENSHOT_DIR = os.path.expanduser(config.PROFILE["screenshot_dir"])
 SCREENSHOT_DELAY_S = 3.0
+RECENTER_BLINK_S = 0.3  # Room View's blink after a recenter, which re-makes the chaperone bubble
+# After the blink, the compositor log's "enabled" line for it can still be on its way: one that
+# turns up this soon after doesn't count as Room View coming on (vr.RoomView.note).
+BLINK_SETTLE_S = 1.0
 
 TIP_DIAMETER = 0.012
 # The alert glows: the bright core is the touch sphere's size, the halo around it fades out.
@@ -67,6 +73,7 @@ class Renderer(threading.Thread):
         self.page = load_page(tabs)  # the open charm's id, or None with every tab closed
         self.tab_page = ui.tab_page_of(self.tab_list(), self.page)  # which tabs the row shows
         self.pressed = None
+        self.looks = {}  # the quick row's buttons as last drawn (quickrow.looks)
         self.status = None  # set by the overlay loop
         self.dirty = threading.Event()
         self.frame = None  # latest PIL image, picked up by the overlay loop
@@ -95,14 +102,15 @@ class Renderer(threading.Thread):
                 badge = charms.call(c, "badge")
                 if badge and badge is not charms.FAILED:
                     badges[charm_id] = badge
-            img = ui.render(self.status, self.quick.state, self.stt.state, self.pressed, tabs,
+            looks = quickrow.looks(quickrow.row(), self.tabs, self.quick.state, self.stt.state, charms.call)
+            img = ui.render(self.status, looks, self.pressed, tabs,
                             self.page, charm, title=False, tab_page=tab_page,
                             badges=badges)
             hits = ui.buttons(tabs, charm, tab_page)
             spec = charms.call(charm, "marquee") if charm is not None else None
             took = time.monotonic() - started
             with self.lock:
-                self.frame, self.hits = img, hits
+                self.frame, self.hits, self.looks = img, hits, looks
                 self.marquee = None if spec is charms.FAILED or not spec else (spec[0], tuple(spec[1]))
             self._budget(charm, took)
 
@@ -225,7 +233,10 @@ def load_page(tabs):
     try:
         with open(STATE_FILE) as f:
             page = json.load(f).get("page")
-    except (OSError, ValueError):
+    except FileNotFoundError:
+        page = None
+    except (OSError, ValueError, AttributeError) as e:
+        print(f"state: {STATE_FILE}: {e!r}", file=sys.stderr, flush=True)
         page = None
     if page is None or page in tabs:
         return page
@@ -234,9 +245,7 @@ def load_page(tabs):
 
 def save_page(page):
     try:
-        os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
-        with open(STATE_FILE, "w") as f:
-            json.dump({"page": page}, f)
+        atomic_write_json(STATE_FILE, {"page": page})
     except OSError as e:
         print(f"state: {e!r}", file=sys.stderr, flush=True)
 
@@ -272,8 +281,13 @@ def main(debug=False):
     pc.start()
     services = Services(changed, pc)
     pc.notify = lambda text, haptic: services.toasts.push("pairing", text, haptic)
-    pc.pin = lambda text: services.toasts.pin("pairing", text) if text else services.toasts.unpin("pairing")
+    pc.pin = lambda text, key="pairing": services.toasts.pin(key, text) if text else services.toasts.unpin(key)
+    pc.typing_allowed = lambda: services.prefs.get("typing")
     stt, quick = Dictation(changed, pc), Quick(changed)
+    if stt.state["configured"] and not stt.cmd:
+        # Dictation types through Steam: if a Steam call fails, grey its button out again until
+        # Steam's text input answers (the check Dictation runs at startup).
+        steam.on_typing_lost(stt.recheck_typing)
     tabs = charms.load(changed, services)
     renderer = Renderer(stt, quick, tabs, services)
     presses = Presses(renderer)
@@ -282,6 +296,10 @@ def main(debug=False):
     for c in tabs.values():
         charms.call(c, "start")
     renderer.start()
+
+    # Settings changed from Cuff for PC (cuff.remote): it sends SIGHUP. Taken up on the loop below.
+    reload_wanted = threading.Event()
+    signal.signal(signal.SIGHUP, lambda *_: reload_wanted.set())
 
     # The panel's size and placement (the settings page's Position sliders): `width` in
     # metres, `mpp` metres per logical pixel, `watch_offset` from the left tip pose.
@@ -347,33 +365,54 @@ def main(debug=False):
     poses = (openvr.TrackedDevicePose_t * openvr.k_unMaxTrackedDeviceCount)()
     standing = openvr.TrackingUniverseStanding
     touching = hovering = armed = False
-    last_debug = last_status = last_error = last_roomview = last_window = last_frames = last_power = 0.0
+    last_debug = last_status = last_error = last_roomview = last_frames = last_power = 0.0
     settings = openvr.VRSettings()
     compositor, apps = openvr.VRCompositor(), openvr.VRApplications()
 
     roomview = vr.RoomView(settings, compositor, config.PROFILE["compositor_log"])
     roomview_on = roomview.shown
 
-    # Passthrough goes through SteamVR's undocumented mailbox, so it's checked twice: the
-    # mailbox must open at startup, and after a press SteamVR's own Room View setting must
-    # follow within PASSTHROUGH_CONFIRM_S. Either failing greys the button out for this run.
+    # Passthrough goes through SteamVR's undocumented mailbox. The button greys out when the
+    # mailbox didn't open at startup or SteamVR refuses a message. After a press SteamVR's own
+    # Room View state should follow within PASSTHROUGH_CONFIRM_S; if it doesn't, the button
+    # shows what SteamVR reports and stays usable.
     mailbox = vr.Mailbox(system)
     quick.set_passthrough(roomview_on(), ok=mailbox.ok)
     passthrough_wanted = [None, 0.0]  # (state asked for, deadline) while a press is unconfirmed
+    bubble_off_at = [None]  # when recenter's Room View blink turns back off
 
     def toggle_passthrough():
         if not quick.state["passthrough_ok"]:
             return
-        want = not roomview_on()
-        # Both messages, as the dashboard sends: plain is Room View itself, _forsceneapps
-        # shows it over a running game.
-        sent = all(mailbox.send("vrcompositor_systemlayer", {"type": kind, "enabled": want})
-                   for kind in ("set_camera_roomview_enabled", "set_camera_roomview_enabled_forsceneapps"))
-        if not sent:
+        # A press during recenter's blink: Room View was off before it (the blink is skipped while
+        # it's on by choice), so the press turns it on, and the blink mustn't turn it off after.
+        blinking, bubble_off_at[0] = bubble_off_at[0] is not None, None
+        want = True if blinking else not roomview_on()
+        if not send_roomview(want):
             quick.set_passthrough(roomview_on(), ok=False)
             return
+        roomview.note(want)
         passthrough_wanted[:] = [want, time.monotonic() + PASSTHROUGH_CONFIRM_S]
         quick.set_passthrough(want)  # answer at once; the setting confirms
+
+    def send_roomview(enabled):
+        """Both messages, as the dashboard sends: plain is Room View itself, _forsceneapps shows it
+        over a running game. Both are always sent (one refused doesn't skip the other); True if
+        SteamVR accepted either."""
+        sent = [mailbox.send("vrcompositor_systemlayer", {"type": kind, "enabled": enabled})
+                for kind in ("set_camera_roomview_enabled", "set_camera_roomview_enabled_forsceneapps")]
+        return any(sent)
+
+    def recenter():
+        """As the Steam button's hold does: the compositor's own seated-and-standing reset (its
+        debug command; vrcmd --recenter is the fallback), then a new chaperone bubble where you
+        stand, which ends a popped bubble's forced Room View. The reset alone leaves the old
+        bubble popped. Turning Room View on clears the bubble and turning it off creates one
+        here, so Room View blinks for RECENTER_BLINK_S, unless it's on by choice."""
+        if not mailbox.send("vrcompositor_systemlayer", {"type": "seated_and_standing_position_reset"}):
+            quick.act("recenter")
+        if mailbox.ok and not roomview_on() and send_roomview(True):
+            bubble_off_at[0] = time.monotonic() + RECENTER_BLINK_S
 
     shots = openvr.VRScreenshots()
     shot_at = [None]  # when the pending screenshot is due
@@ -393,30 +432,6 @@ def main(debug=False):
 
     keyboard_open = [False]
 
-    def window_overlay():
-        """The window the keyboard should type into: a visible gamescope window (games, the
-        desktop), else a visible Steam menu, else None. Like the "show keyboard" button SteamVR
-        draws under them, the keyboard then belongs to that overlay, and its owner types."""
-        for key in [f"valve.steam.desktopgame.{n}" for n in range(8)] + ["valve.steam.gamepadui.main"]:
-            try:
-                h = ov.findOverlay(key)
-            except openvr.error_code.OverlayError:
-                continue
-            if ov.isOverlayVisible(h):
-                return h
-        return None
-
-    def toggle_keyboard():
-        if keyboard_open[0]:
-            ov.hideKeyboard()
-            return
-        target = window_overlay()
-        if target is None:  # the button is greyed out then; nothing to type into
-            return
-        ov.showKeyboardForOverlay(target, openvr.k_EGamepadTextInputModeNormal,
-                                  openvr.k_EGamepadTextInputLineModeSingleLine,
-                                  openvr.KeyboardFlag_Minimal, "", 1024, "", 0)
-
     def press(name, px, py):
         print(f"press {name} at ({px:.0f}, {py:.0f}) on {renderer.page}", flush=True)
         hands.pulse(poker)
@@ -424,10 +439,16 @@ def main(debug=False):
             stt.toggle()
         elif name == "q:screenshot":
             shot_at[0] = time.monotonic() + SCREENSHOT_DELAY_S
-        elif name == "q:keyboard":
-            toggle_keyboard()
         elif name == "q:passthrough":
             toggle_passthrough()
+        elif name == "q:recenter":
+            recenter()
+        elif name.startswith("q:") and ":" in name[2:]:
+            # A charm's button (quickrow.py): on the charm worker, as the charm may take a moment.
+            charm_id, _, button = name[2:].partition(":")
+            charm = renderer.tabs.get(charm_id)
+            if charm is not None and renderer.looks.get(name[2:], {}).get("style") != "off":
+                presses.press(charm, f"quick:{button}")
         elif name.startswith("q:"):
             quick.act(name[2:])
         elif name.startswith("tab:"):
@@ -453,10 +474,9 @@ def main(debug=False):
                 ev = openvr.VREvent_t()
                 while system.pollNextEvent(ev):
                     if ev.eventType in (openvr.VREvent_KeyboardOpened_Global, openvr.VREvent_KeyboardClosed_Global):
-                        # Whoever opened it (us, a window's control bar, Steam), so the button
-                        # always knows the real state.
+                        # Whoever opened it (a window's control bar, Steam): the panel hides
+                        # while it's up, as SteamVR blanks other apps' controller poses then.
                         keyboard_open[0] = ev.eventType == openvr.VREvent_KeyboardOpened_Global
-                        quick.set_keyboard(keyboard_open[0])
                     if ev.eventType == openvr.VREvent_CameraSettingsHaveChanged:
                         last_roomview = 0.0  # re-read the passthrough state now
                     if ev.eventType == openvr.VREvent_Quit:
@@ -466,6 +486,12 @@ def main(debug=False):
                 # Status bar: re-read every 10 s (2 s while a battery hasn't reported yet, as the
                 # controllers often haven't at startup) and at the minute; redraw only on a change.
                 now = time.monotonic()
+                if bubble_off_at[0] is not None and now >= bubble_off_at[0]:
+                    bubble_off_at[0] = None
+                    if send_roomview(False):
+                        # note reads the log through first, and ignores a late "enabled" line from
+                        # the blink, so it doesn't flip the state back to on.
+                        roomview.note(False, settle=BLINK_SETTLE_S)
                 if shot_at[0] is not None:
                     if now >= shot_at[0]:
                         shot_at[0] = None
@@ -482,8 +508,9 @@ def main(debug=False):
                     elif want is not None and now > deadline:
                         passthrough_wanted[0] = None
                         print(f"passthrough: SteamVR didn't follow the mailbox message within "
-                              f"{PASSTHROUGH_CONFIRM_S:.0f} s; greying the button out", file=sys.stderr, flush=True)
-                        quick.set_passthrough(shown, ok=False)
+                              f"{PASSTHROUGH_CONFIRM_S:.0f} s; it reports {'on' if shown else 'off'}",
+                              file=sys.stderr, flush=True)
+                        quick.set_passthrough(shown)
                     elif want is None:
                         if shown != quick.state["passthrough"]:
                             print(f"passthrough: SteamVR reports {'on' if shown else 'off'}", flush=True)
@@ -513,10 +540,15 @@ def main(debug=False):
                         print(f"power: {alert}", flush=True)
                         services.toasts.push("cuff", alert, haptic=True, glow="orange", icon=BATTERY_ICON)
 
-                # The keyboard button is greyed out while there's no window for it to type into.
-                if now - last_window > 0.5:
-                    last_window = now
-                    quick.set_keyboard_target(window_overlay() is not None)
+                if reload_wanted.is_set():
+                    reload_wanted.clear()
+                    print("settings: changed from Cuff for PC; reloading", flush=True)
+                    PLACEMENT.reload()  # picked up just below
+                    services.prefs.reload()
+                    quickrow.reload()
+                    for c in tabs.values():  # off the overlay loop, as charm code always is
+                        threading.Thread(target=charms.call, args=(c, "reload"), daemon=True).start()
+                    renderer.dirty.set()
 
                 # A settings Apply: the panel's new size and place.
                 if PLACEMENT.version != geometry_version:
@@ -742,7 +774,8 @@ def render_to(path, page=None):
         charms.call(c, "sample")
     stt = {"phase": "listening", "text": "", "configured": True}
     status = {"time": "7:52 pm", "batteries": [("H", 0.53, "plugged"), ("L", 0.86, "charging"), ("R", 0.15, "battery")]}
-    quick = {"mic_muted": True, "passthrough": True, "stt_up": True}
+    quick = quickrow.looks(quickrow.row(), tabs, {"mic_muted": True, "passthrough": True, "stt_up": True}, stt,
+                           charms.call)
     pressed = "q:recenter"
     if page:
         own = charms.call(tabs[page], "buttons")
@@ -750,7 +783,7 @@ def render_to(path, page=None):
             pressed = "c:" + next(iter(own))
     tab_list = [(i, c.label) for i, c in tabs.items()]
     badges = {i: b for i, c in tabs.items() if (b := charms.call(c, "badge")) and b is not charms.FAILED}
-    ui.render(status, quick, stt, pressed, tab_list, page, tabs.get(page),
+    ui.render(status, quick, pressed, tab_list, page, tabs.get(page),
               tab_page=ui.tab_page_of(tab_list, page), badges=badges).save(path)
 
 

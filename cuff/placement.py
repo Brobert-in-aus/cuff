@@ -15,6 +15,7 @@ import sys
 import threading
 
 from . import wrist
+from .atomic import atomic_write_json
 from .config import CONFIG
 
 FILE = os.path.expanduser("~/.config/cuff/placement.json")
@@ -93,7 +94,7 @@ class Placement:
                 values["hand"] = saved["hand"]
         except FileNotFoundError:
             pass
-        except (OSError, ValueError, TypeError) as e:
+        except (OSError, ValueError, TypeError, AttributeError, KeyError) as e:
             print(f"placement: {FILE}: {e!r}; using the defaults", file=sys.stderr, flush=True)
         return values
 
@@ -130,15 +131,20 @@ class Placement:
             self.version += 1
             saved = {k: v for k, v in self.applied.items() if v != defaults()[k]}
         try:
-            os.makedirs(os.path.dirname(FILE), exist_ok=True)
-            with open(FILE, "w") as f:
-                json.dump(saved, f, indent=1)
+            atomic_write_json(FILE, saved, indent=1)
         except OSError as e:
             print(f"placement: saving: {e!r}", file=sys.stderr, flush=True)
 
     def cancel(self):
         with self.lock:
             self.pending = dict(self.applied)
+
+    def reload(self):
+        """placement.json changed from outside (Cuff for PC): applied at once."""
+        values = self._load()
+        with self.lock:
+            self.applied, self.pending = values, dict(values)
+            self.version += 1
 
     def reset(self):
         """The defaults (but the same wrist), as pending: they take effect with Apply."""

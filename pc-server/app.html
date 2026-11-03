@@ -1,0 +1,907 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cuff for PC</title>
+<!-- Cuff for PC's app (docs/PC-APP.md), served by server.py at /app to the PC itself only.
+     Its API is appapi.py; every call carries X-Cuff-App: 1. -->
+<style>
+  :root {
+    --bg: #f3f4f8; --side: #e9ebf2; --card: #ffffff; --fg: #1b1e27; --dim: #626a7c; --line: #dde1ea;
+    --accent: #15924f; --accent-fg: #ffffff; --warn: #c9302c; --amber: #a86a12; --button: #e6e9f1;
+    --input: #f7f8fb; --shadow: 0 1px 2px rgba(20, 24, 40, .06); --blue: #2f6fd6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #10121a; --side: #151826; --card: #1b1f2e; --fg: #eef0f6; --dim: #99a0b2; --line: #2a2f42;
+      --accent: #1ed760; --accent-fg: #0c1a10; --warn: #ef5a52; --amber: #f0aa1e; --button: #2a2f42;
+      --input: #141724; --shadow: none; --blue: #6aa3ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 "Segoe UI", system-ui, sans-serif;
+         display: flex; }
+  nav { width: 210px; flex: none; background: var(--side); padding: 18px 10px; display: flex; flex-direction: column; gap: 2px; }
+  nav .brand { font-weight: 700; font-size: 17px; padding: 4px 12px 16px; display: flex; align-items: center; gap: 9px; }
+  nav a { color: var(--dim); text-decoration: none; padding: 8px 12px; border-radius: 8px; display: flex;
+          align-items: center; gap: 10px; }
+  nav a:hover { background: var(--button); color: var(--fg); }
+  nav a.on { background: var(--card); color: var(--fg); font-weight: 600; box-shadow: var(--shadow); }
+  nav .foot { margin-top: auto; padding: 8px 12px; color: var(--dim); font-size: 12px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--dim); flex: none; }
+  .dot.on { background: var(--accent); } .dot.warn { background: var(--amber); }
+  main { flex: 1; overflow: auto; }
+  .page { display: none; max-width: 980px; padding: 26px 32px 90px; }
+  .page.on { display: block; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  .lead { color: var(--dim); margin: 0 0 20px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--dim); margin: 0 0 10px; font-weight: 600; }
+  h3 { font-size: 15px; margin: 0 0 8px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px;
+            margin-bottom: 16px; box-shadow: var(--shadow); }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .grid2 > section { margin: 0; }
+  .row { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-top: 1px solid var(--line); }
+  .row:first-child { border-top: 0; padding-top: 0; }
+  .grow { flex: 1; min-width: 0; }
+  .sub { color: var(--dim); font-size: 13px; }
+  .big { font-size: 20px; font-weight: 600; }
+  button, .btn { font: inherit; border: 0; border-radius: 8px; padding: 7px 14px; background: var(--button);
+                 color: var(--fg); cursor: pointer; white-space: nowrap; }
+  button:hover { filter: brightness(1.06); }
+  button:disabled { opacity: .45; cursor: default; filter: none; }
+  button.primary { background: var(--accent); color: var(--accent-fg); font-weight: 600; }
+  button.danger, button.armed { background: var(--warn); color: #fff; }
+  button.small { padding: 4px 10px; font-size: 13px; }
+  input[type=text], input[type=password], input:not([type]) {
+    font: inherit; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--input); color: var(--fg); }
+  select { font: inherit; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--input); color: var(--fg); }
+  label.check { display: flex; gap: 8px; align-items: flex-start; padding: 5px 0; cursor: pointer; }
+  label.check input { margin-top: 3px; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .msg { margin-top: 8px; font-size: 13px; min-height: 1em; }
+  .msg.bad { color: var(--warn); } .msg.good { color: var(--accent); }
+  pre { margin: 0; overflow: auto; font: 12px/1.45 Consolas, monospace; color: var(--dim); white-space: pre-wrap; word-break: break-word; }
+  pre.console { background: var(--input); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; max-height: 340px; min-height: 120px; color: var(--fg); }
+  .prompt { margin-top: 10px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--amber); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .kv { display: grid; grid-template-columns: fit-content(40%) 1fr; gap: 6px 16px; }
+  .kv div:nth-child(odd) { color: var(--dim); }
+  .hidden { display: none !important; }
+  code { font: 12px Consolas, monospace; background: var(--input); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line); }
+  ol.steps { margin: 6px 0 0; padding-left: 20px; } ol.steps li { margin: 4px 0; }
+
+  /* recordings */
+  .videos { display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 14px; }
+  .video { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; }
+  .thumb { aspect-ratio: 16 / 9; background: var(--input); position: relative; display: flex; align-items: center; justify-content: center; color: var(--dim); }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .badge { position: absolute; top: 8px; left: 8px; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 99px; background: rgba(0,0,0,.6); color: #fff; }
+  .len { position: absolute; bottom: 8px; right: 8px; font-size: 12px; padding: 1px 6px; border-radius: 4px; background: rgba(0,0,0,.65); color: #fff; }
+  .vbody { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--accent); }
+  .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+
+  /* settings */
+  .settings { display: grid; grid-template-columns: 200px 1fr; gap: 18px; align-items: start; }
+  .tabs { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 0; }
+  .tabs button { text-align: left; background: transparent; color: var(--dim); }
+  .tabs button.on { background: var(--card); color: var(--fg); font-weight: 600; box-shadow: var(--shadow); }
+  .tabs button .n { float: right; color: var(--amber); }
+  .field { display: grid; grid-template-columns: 170px 1fr; gap: 14px; padding: 11px 0; border-top: 1px solid var(--line); align-items: center; }
+  .group h3 + .field { border-top: 0; }
+  .group { margin-bottom: 18px; }
+  .field .help { grid-column: 2; color: var(--dim); font-size: 12px; margin-top: -8px; }
+  .field.changed > .flabel { color: var(--amber); }
+  .seg { display: inline-flex; background: var(--input); border: 1px solid var(--line); border-radius: 9px; padding: 2px; flex-wrap: wrap; }
+  .seg button { background: transparent; padding: 5px 13px; color: var(--dim); }
+  .seg button.on { background: var(--card); color: var(--fg); box-shadow: 0 1px 3px rgba(0,0,0,.18); font-weight: 600; }
+  .slider { display: flex; gap: 12px; align-items: center; }
+  .slider input { flex: 1; accent-color: var(--accent); }
+  .slider .val { width: 70px; text-align: right; font-variant-numeric: tabular-nums; }
+  .switch { position: relative; width: 40px; height: 22px; background: var(--line); border-radius: 99px; cursor: pointer; border: 0; padding: 0; }
+  .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left .15s; }
+  .switch.on { background: var(--accent); } .switch.on::after { left: 21px; }
+  .slots { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 12px; max-width: 620px; }
+  .slots label { font-size: 11px; color: var(--dim); display: block; margin-bottom: 3px; }
+  .slots select { width: 100%; }
+  .order { display: flex; flex-direction: column; gap: 6px; max-width: 360px; }
+  .order div { display: flex; align-items: center; gap: 8px; background: var(--input); border: 1px solid var(--line); border-radius: 8px; padding: 5px 6px 5px 12px; }
+  .order span { flex: 1; }
+  .grade { font-size: 12px; font-weight: 700; padding: 2px 10px; border-radius: 99px; text-transform: uppercase; letter-spacing: .05em; }
+  .grade.good { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--accent); }
+  .grade.fair { background: color-mix(in srgb, var(--amber) 22%, transparent); color: var(--amber); }
+  .grade.poor { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
+  .figures { display: flex; gap: 22px; margin: 10px 0 12px; flex-wrap: wrap; }
+  .figures div b { display: block; font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .figures div span { color: var(--dim); font-size: 12px; }
+  .kv.small { font-size: 13px; }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; }
+  .chart { width: 100%; height: 120px; background: var(--input); border: 1px solid var(--line); border-radius: 8px; margin-top: 4px; }
+  .legend { display: flex; gap: 16px; margin-top: 8px; font-size: 12px; color: var(--dim); }
+  .legend i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+  .typebox { min-height: 90px; border: 2px dashed var(--line); border-radius: 10px; padding: 16px; color: var(--dim);
+             display: flex; align-items: center; justify-content: center; text-align: center; cursor: text; outline: none; }
+  .typebox:focus { border-color: var(--accent); border-style: solid; color: var(--fg); }
+  textarea { width: 100%; font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--input); color: var(--fg); resize: vertical; }
+  .savebar { position: fixed; bottom: 0; left: 210px; right: 0; background: var(--card); border-top: 1px solid var(--line);
+             padding: 12px 32px; display: flex; gap: 12px; align-items: center; box-shadow: 0 -2px 10px rgba(0,0,0,.08); }
+  @media (max-width: 760px) {
+    nav { width: 64px; } nav a span.t, nav .brand span, nav .foot { display: none; }
+    .savebar { left: 64px; } .settings { grid-template-columns: 1fr; } .tabs { flex-direction: row; flex-wrap: wrap; position: static; }
+    .field { grid-template-columns: 1fr; } .field .help { grid-column: 1; } .page { padding: 18px 16px 90px; }
+  }
+</style>
+</head>
+<body>
+<nav>
+  <div class="brand"><span class="dot" id="navdot"></span><span>Cuff for PC</span></div>
+  <a href="#overview" data-page="overview"><span>◉</span><span class="t">Overview</span></a>
+  <a href="#headset" data-page="headset"><span>⚙</span><span class="t">Headset setup</span></a>
+  <a href="#recordings" data-page="recordings"><span>▶</span><span class="t">Recordings</span></a>
+  <a href="#settings" data-page="settings"><span>☰</span><span class="t">Cuff settings</span></a>
+  <a href="#connection" data-page="connection"><span>📶</span><span class="t">Connection</span></a>
+  <a href="#type" data-page="type"><span>⌨</span><span class="t">Type on the Frame</span></a>
+  <a href="#log" data-page="log"><span>≡</span><span class="t">Log</span></a>
+  <div class="foot" id="version"></div>
+</nav>
+<main>
+
+<!-- ======================================================= overview -->
+<div class="page" id="page-overview">
+  <h1>Overview</h1>
+  <p class="lead">Cuff on your wrist, and what this PC does for it.</p>
+  <div class="grid2">
+    <section>
+      <h2>Headset</h2>
+      <div class="big" id="ov-headset">…</div>
+      <div class="sub" id="ov-headset-sub"></div>
+    </section>
+    <section>
+      <h2>Dictation</h2>
+      <div class="big" id="ov-dictation">…</div>
+      <div class="sub" id="ov-dictation-sub"></div>
+    </section>
+    <section>
+      <h2>Recordings</h2>
+      <div class="big" id="ov-videos">…</div>
+      <div class="sub" id="ov-videos-sub"></div>
+    </section>
+    <section>
+      <h2>Cuff for PC</h2>
+      <div class="big" id="ov-app">…</div>
+      <div class="sub" id="ov-app-sub"></div>
+      <div class="actions" style="margin-top:10px">
+        <button class="primary hidden" id="up-install">Update</button>
+        <button class="small" id="up-check">Check for updates</button>
+      </div>
+    </section>
+  </div>
+  <p></p>
+  <section>
+    <h2>Paired headsets</h2>
+    <div id="headsets"><div class="sub">Loading…</div></div>
+  </section>
+  <section>
+    <h2>Pair a headset</h2>
+    <div class="sub">Headset setup pairs the headset for you when it installs Cuff. To pair by code instead:</div>
+    <div id="pair-start" style="margin-top:10px">
+      <button class="primary" id="open">Pair with a code</button>
+      <span class="sub">&nbsp; With the headset on and on the same network, its wrist shows a 4-digit code within a few seconds.</span>
+    </div>
+    <div id="pair-code" class="hidden" style="margin-top:10px">
+      <div class="sub">Pairing is open for 5 minutes. Type the code the wrist shows:</div>
+      <p class="actions"><input id="code" inputmode="numeric" maxlength="4" autocomplete="off" style="width:7em;font-size:20px;letter-spacing:.3em;text-align:center">
+        <button class="primary" id="confirm">Pair</button></p>
+    </div>
+    <div class="msg" id="pair-msg"></div>
+  </section>
+</div>
+
+<!-- ======================================================= headset setup -->
+<div class="page" id="page-headset">
+  <h1>Headset setup</h1>
+  <p class="lead">Install, update or remove Cuff on the Steam Frame from here, over your network.</p>
+
+  <section>
+    <h2>Connection</h2>
+    <div id="conn-on" class="hidden">
+      <div class="actions"><span class="dot on"></span><span class="grow" id="conn-text"></span>
+        <button id="forget">Disconnect</button></div>
+    </div>
+    <div id="conn-off">
+      <div class="actions">
+        <input id="host" placeholder="Headset address, e.g. 10.0.0.40" list="host-list" style="width:300px">
+        <datalist id="host-list"></datalist>
+        <input id="user" value="steamos" style="width:110px" title="User on the headset">
+        <input id="password" type="password" placeholder="Password (first time only)" style="width:220px" autocomplete="off">
+        <button class="primary" id="connect">Connect</button>
+      </div>
+      <div class="msg" id="conn-msg"></div>
+      <div id="conn-trust" class="hidden actions" style="margin-top:8px">
+        <span class="sub grow">The headset's SSH identity: <code id="conn-fp"></code></span>
+        <button id="trust">Trust this headset</button>
+      </div>
+      <details style="margin-top:10px">
+        <summary>Before the first install</summary>
+        <div class="sub" style="margin-top:6px">The headset needs SSH turned on, once. On the Frame, switch to Desktop Mode and open Konsole, then:</div>
+        <ol class="steps sub">
+          <li>If you've never set a password: <code>passwd</code></li>
+          <li>Turn SSH on: <code>sudo systemctl enable --now sshd</code></li>
+          <li>Find its address: <code>ip -4 addr show wlan0</code> (the number after <code>inet</code>)</li>
+        </ol>
+        <div class="sub" style="margin-top:6px">The password is used once, to give this app its own key to the headset. It isn't saved.</div>
+      </details>
+    </div>
+  </section>
+
+  <div class="grid2">
+    <section>
+      <h2>On the headset</h2>
+      <div class="kv" id="installed"><div>Status</div><div>Not checked yet</div></div>
+      <p class="actions" style="margin-top:12px"><button id="check">Check</button></p>
+    </section>
+    <section>
+      <h2>Install or update</h2>
+      <div class="sub" id="install-version"></div>
+      <label class="check"><input type="checkbox" checked disabled> <span>Cuff<div class="sub">The wrist panel itself</div></span></label>
+      <label class="check"><input type="checkbox" id="p-recorder"> <span>Recorder<div class="sub">For the Record tab. Builds on the headset in a few minutes (installs Rust, ~300 MB, if needed)</div></span></label>
+      <label class="check"><input type="checkbox" id="p-helper"> <span>Panel helper<div class="sub">Sharper recordings, any shape. Asks for the headset's password</div></span></label>
+      <label class="check"><input type="checkbox" id="p-player"> <span>Player (mpv)<div class="sub">Watch recordings in the headset</div></span></label>
+      <label class="check"><input type="checkbox" id="p-pair" checked> <span>Pair with this PC<div class="sub">Dictation and stats from this PC, no code needed</div></span></label>
+      <p class="actions" style="margin-top:12px"><button class="primary" id="install">Install</button>
+        <button id="uninstall">Uninstall…</button></p>
+    </section>
+  </div>
+
+  <section id="job" class="hidden">
+    <div class="actions" style="margin-bottom:10px"><h2 class="grow" style="margin:0" id="job-title">Working</h2>
+      <button class="small" id="cancel">Stop</button></div>
+    <pre class="console" id="job-out"></pre>
+    <div class="prompt hidden" id="prompt">
+      <span class="grow" id="prompt-text"></span>
+      <span id="prompt-yesno"><button class="primary" data-answer="y">Yes</button> <button data-answer="n">No</button></span>
+      <span id="prompt-input" class="actions"><input id="prompt-value" autocomplete="off"><button class="primary" id="prompt-send">Send</button></span>
+    </div>
+  </section>
+</div>
+
+<!-- ======================================================= recordings -->
+<div class="page" id="page-recordings">
+  <h1>Recordings</h1>
+  <p class="lead">Clips and recordings on the headset. Download them to this PC, by hand or automatically.</p>
+  <section>
+    <h2>Downloads</h2>
+    <div class="actions">
+      <span class="sub">Saved to</span> <code id="v-folder"></code>
+      <button class="small" id="v-choose">Change…</button>
+      <button class="small" id="v-openfolder">Open folder</button>
+    </div>
+    <div style="margin-top:10px">
+      <label class="check"><input type="checkbox" id="v-auto"> <span>Download new videos automatically<div class="sub">Checks every minute while the headset's connected, once a video has finished</div></span></label>
+      <div id="v-auto-opts" style="padding-left:26px">
+        <label class="check"><input type="checkbox" id="v-auto-clips"> <span>Clips</span></label>
+        <label class="check"><input type="checkbox" id="v-auto-recordings"> <span>Recordings</span></label>
+        <label class="check"><input type="checkbox" id="v-delete"> <span>Then delete them from the headset<div class="sub">Only after each download is checked</div></span></label>
+      </div>
+    </div>
+    <div class="msg bad" id="v-errors"></div>
+  </section>
+  <div class="toolbar">
+    <button id="v-refresh">Refresh</button>
+    <button id="v-all">Download all new</button>
+    <span class="sub grow" id="v-summary"></span>
+  </div>
+  <div class="videos" id="videos"></div>
+</div>
+
+<!-- ======================================================= settings -->
+<div class="page" id="page-settings">
+  <h1>Cuff settings</h1>
+  <p class="lead">Everything Cuff's Settings tab and charms set on the wrist, read from the headset.</p>
+  <div id="s-wait" class="sub">Loading from the headset…</div>
+  <div class="settings hidden" id="s-body">
+    <div class="tabs" id="s-tabs"></div>
+    <section id="s-section"></section>
+  </div>
+  <div class="savebar hidden" id="savebar">
+    <span class="grow" id="save-text"></span>
+    <button id="revert">Revert</button>
+    <button class="primary" id="save">Save to headset</button>
+  </div>
+</div>
+
+<!-- ======================================================= connection -->
+<div class="page" id="page-connection">
+  <h1>Connection</h1>
+  <p class="lead">How well the headset and this PC reach each other, measured from both ends every <span id="c-every">15</span> seconds.</p>
+  <div class="toolbar"><button id="c-refresh">Measure now</button><span class="sub grow" id="c-when"></span></div>
+  <div class="grid2">
+    <section id="c-dongle"></section>
+    <section id="c-lan"></section>
+  </div>
+  <p></p>
+  <section>
+    <h2>The last 10 minutes</h2>
+    <div class="charts">
+      <div><div class="sub">Round trip (ms, lower is better)</div><svg id="c-ping" viewBox="0 0 400 110" class="chart"></svg></div>
+      <div><div class="sub">Signal (dBm, higher is better)</div><svg id="c-signal" viewBox="0 0 400 110" class="chart"></svg></div>
+    </div>
+    <div class="legend"><span><i style="background:var(--accent)"></i>Dongle</span><span><i style="background:var(--blue)"></i>Your network</span></div>
+  </section>
+  <section id="c-stream"></section>
+</div>
+
+<!-- ======================================================= type -->
+<div class="page" id="page-type">
+  <h1>Type on the Frame</h1>
+  <p class="lead">What you type here goes to whatever has focus in the headset: a login, a search box, a game's chat.</p>
+  <section>
+    <div class="actions"><span class="dot" id="t-dot"></span><span class="grow" id="t-status">…</span></div>
+  </section>
+  <section>
+    <h2>Type live</h2>
+    <div id="t-box" tabindex="0" class="typebox">Click here, then type. Enter, Backspace, Tab, Esc, Delete, the arrows, Home and End work too.</div>
+    <div class="sub" id="t-count" style="margin-top:8px"></div>
+  </section>
+  <section>
+    <h2>Send text</h2>
+    <textarea id="t-text" rows="3" placeholder="Write it here first, then send it in one go"></textarea>
+    <div class="actions" style="margin-top:8px">
+      <button class="primary" id="t-send">Send</button>
+      <label class="check"><input type="checkbox" id="t-enter"> <span>Then press Enter</span></label>
+    </div>
+  </section>
+  <section>
+    <h2>Clipboard</h2>
+    <div class="actions"><button id="t-clip">Send the clipboard</button>
+      <span class="sub">or press <code>Ctrl</code>+<code>Alt</code>+<code>V</code> anywhere on the PC, even with this window closed.</span></div>
+    <div class="msg" id="t-msg"></div>
+  </section>
+  <p class="sub">Only paired headsets receive it, and nothing typed is logged on either side. The headset can turn this off in Cuff settings.</p>
+</div>
+
+<!-- ======================================================= log -->
+<div class="page" id="page-log">
+  <h1>Log</h1>
+  <p class="lead">Cuff for PC's own log, newest last.</p>
+  <section><pre id="log" style="max-height:none"></pre></section>
+</div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const H = {"X-Cuff-App": "1", "Content-Type": "application/json"};
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {headers: H, cache: "no-store"}
+                                                 : {method: "POST", headers: H, body: JSON.stringify(body)});
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok && data.message === undefined) data.message = data.error || `Failed (${r.status})`;
+  data.httpOk = r.ok;
+  return data;
+}
+function el(tag, props, ...kids) {
+  const e = Object.assign(document.createElement(tag), props || {});
+  for (const k of kids) if (k != null) e.append(k);
+  return e;
+}
+function msg(id, text, good) { $(id).textContent = text || ""; $(id).className = "msg " + (good ? "good" : "bad"); }
+function bytes(n) { return n > 1e9 ? (n / 1e9).toFixed(1) + " GB" : n > 1e6 ? (n / 1e6).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1e3)) + " KB"; }
+function clock(s) { if (s == null) return ""; const m = Math.floor(s / 60), r = s % 60; return m >= 60 ? `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}:${String(r).padStart(2, "0")}` : `${m}:${String(r).padStart(2, "0")}`; }
+function ago(s) {
+  if (s == null) return "not heard from since Cuff for PC started";
+  if (s < 60) return "heard from just now";
+  if (s < 3600) return `heard from ${Math.round(s / 60)} min ago`;
+  return `heard from ${Math.round(s / 3600)} h ago`;
+}
+// Two clicks for anything destructive: the first arms the button for 4 s.
+const armed = {};
+function twice(key, button, text) {
+  if (armed[key]) { delete armed[key]; return true; }
+  armed[key] = true;
+  const was = button.textContent; button.textContent = text; button.classList.add("armed");
+  setTimeout(() => { delete armed[key]; button.textContent = was; button.classList.remove("armed"); }, 4000);
+  return false;
+}
+
+// ------------------------------------------------------------ pages
+let page = "overview";
+function show(name) {
+  page = document.getElementById("page-" + name) ? name : "overview";
+  document.querySelectorAll(".page").forEach((p) => p.classList.toggle("on", p.id === "page-" + page));
+  document.querySelectorAll("nav a").forEach((a) => a.classList.toggle("on", a.dataset.page === page));
+  if (page === "settings") loadSettings();
+  if (page === "recordings") refreshVideos(true);
+  tick();
+}
+window.addEventListener("hashchange", () => show(location.hash.slice(1)));
+
+// ------------------------------------------------------------ the PC and the headset link
+let state = null, pairingOpen = false;
+let untrusted = null;  // {"host", "fingerprint"}: the headset identity last refused
+async function tick() {
+  try { state = await api("/app/state"); } catch { $("navdot").className = "dot warn"; return; }
+  const f = state.frame, about = state.headsets.some((h) => h.seen_s != null && h.seen_s < 60);
+  $("navdot").className = "dot" + (about || f.connected ? " on" : "");
+  $("version").textContent = `Cuff ${f.version}`;
+  // overview
+  $("ov-headset").textContent = about ? "Connected" : f.connected ? "Reachable" : "Not around";
+  if (f.behind) $("ov-headset").textContent += " · update ready";
+  const near = state.headsets.find((h) => h.seen_s != null && h.seen_s < 60);
+  const via = near ? (near.link === "dongle" ? " over the dongle" : " over your network") : "";
+  $("ov-headset-sub").textContent = f.connected ? `Set up over SSH at ${f.host}` + (about ? `; Cuff is talking to this PC${via}` : "")
+    : about ? `Cuff is talking to this PC${via}` : f.host ? `Looking for it at ${f.host}…` : "Set it up on the Headset setup page";
+  showTyping(state.typing);
+  showUpdates(state.updates);
+  if (linkState && linkState.latest) {
+    const l = linkState.latest, parts = [];
+    if (l.dongle && l.dongle.grade) parts.push(`dongle ${l.dongle.grade}${l.dongle.ping && l.dongle.ping.avg_ms != null ? ", " + l.dongle.ping.avg_ms + " ms" : ""}`);
+    if (l.lan && l.lan.grade) parts.push(`network ${l.lan.grade}${l.lan.ping && l.lan.ping.avg_ms != null ? ", " + l.lan.ping.avg_ms + " ms" : ""}`);
+    if (parts.length) $("ov-headset-sub").textContent += ` · ${parts.join(" · ")}`;
+  }
+  $("ov-dictation").textContent = state.model ? "Ready" : "Off";
+  $("ov-dictation-sub").textContent = state.model ? `${state.model}, on the ${state.device}` : "This copy runs without the speech model";
+  showHeadsets(state.headsets);
+  if (pairingOpen && !state.pairing) showPairing(false);
+  // headset page
+  $("conn-on").classList.toggle("hidden", !f.connected);
+  $("conn-off").classList.toggle("hidden", f.connected);
+  $("conn-text").textContent = f.connected ? `Connected to ${f.user}@${f.host}` : "";
+  if (!f.connected && f.message && !$("conn-msg").textContent) msg("conn-msg", f.message);
+  untrusted = f.connected ? null : f.untrusted;
+  $("conn-trust").classList.toggle("hidden", !untrusted);
+  $("conn-fp").textContent = untrusted ? untrusted.fingerprint : "";
+  if (!$("host").value && f.host) $("host").value = f.host;
+  $("host-list").replaceChildren(...f.suggest.map((a) => el("option", {value: a})));
+  const installed = (f.status.Cuff || "").startsWith("yes");
+  $("install-version").textContent = !installed ? `Installs Cuff ${f.version} from this PC.`
+    : f.behind ? `The headset has Cuff ${f.headset_version || "(an older build)"}; this PC has ${f.version}.`
+    : `The headset has this PC's Cuff (${f.version}). Installing again repairs it, or adds parts.`;
+  $("install").textContent = installed ? (f.behind ? "Update" : "Install again") : "Install";
+  showInstalled(f.status);
+  showJob(f.job);
+  for (const id of ["check", "install", "uninstall"]) $(id).disabled = !f.connected || (f.job && f.job.running);
+  // log
+  const log = $("log"), atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
+  log.textContent = state.log.join("\n");
+  if (atEnd) log.scrollTop = log.scrollHeight;
+  if (page === "recordings" || page === "overview") refreshVideos(false);
+  if (page === "connection" || page === "overview") refreshLink();
+}
+
+function showHeadsets(list) {
+  const box = $("headsets");
+  box.replaceChildren();
+  if (!list.length) return box.append(el("div", {className: "sub", textContent: "None paired yet."}));
+  for (const h of list) {
+    const b = el("button", {textContent: "Unpair", className: "small"});
+    b.onclick = async () => { if (twice("unpair" + h.id, b, "Unpair? Click again")) { await api("/app/unpair", {id: h.id}); tick(); } };
+    box.append(el("div", {className: "row"},
+      el("span", {className: "dot" + (h.seen_s != null && h.seen_s < 60 ? " on" : "")}),
+      el("div", {className: "grow"}, el("div", {textContent: h.name}),
+        el("div", {className: "sub", textContent: `${ago(h.seen_s)}${h.link ? (h.link === "dongle" ? " · over the dongle" : " · over your network") : ""}${h.address ? " · " + h.address : ""}${h.paired ? " · paired " + h.paired : ""}`})), b));
+  }
+}
+function showPairing(open) {
+  pairingOpen = open;
+  $("pair-start").classList.toggle("hidden", open);
+  $("pair-code").classList.toggle("hidden", !open);
+  if (open) $("code").focus();
+}
+$("open").onclick = async () => {
+  const r = await fetch("/pair/open", {method: "POST", headers: H});
+  if (r.ok) { msg("pair-msg", ""); showPairing(true); } else msg("pair-msg", "Couldn't open pairing.");
+};
+async function confirmCode() {
+  const code = $("code").value.trim();
+  if (!/^\d{4}$/.test(code)) return msg("pair-msg", "The code is 4 digits.");
+  const r = await fetch("/pair/confirm", {method: "POST", headers: H, body: JSON.stringify({code})});
+  const body = await r.json().catch(() => ({}));
+  if (r.ok) { msg("pair-msg", `Paired ${body.name}.`, true); $("code").value = ""; showPairing(false); }
+  else msg("pair-msg", body.error ? body.error[0].toUpperCase() + body.error.slice(1) + "." : "Pairing didn't work.");
+  tick();
+}
+$("confirm").onclick = confirmCode;
+$("code").addEventListener("keydown", (e) => { if (e.key === "Enter") confirmCode(); });
+
+// ------------------------------------------------------------ headset setup
+$("connect").onclick = async () => {
+  msg("conn-msg", "Connecting…", true);
+  const r = await api("/app/frame/connect", {host: $("host").value, user: $("user").value, password: $("password").value || undefined});
+  $("password").value = "";
+  msg("conn-msg", r.message, r.ok);
+  if (r.ok) setTimeout(() => msg("conn-msg", ""), 2000);
+  tick();
+};
+$("password").addEventListener("keydown", (e) => { if (e.key === "Enter") $("connect").click(); });
+// A host key this app hasn't pinned is refused until the person trusts that exact fingerprint.
+$("trust").onclick = async (e) => {
+  const u = untrusted;
+  if (!u || !twice("trust", e.target, "Trust it? Click again")) return;
+  msg("conn-msg", "Connecting…", true);
+  const r = await api("/app/frame/connect", {host: u.host, user: $("user").value, password: $("password").value || undefined,
+                                             trust: u.fingerprint});
+  $("password").value = "";
+  msg("conn-msg", r.message, r.ok);
+  if (r.ok) setTimeout(() => msg("conn-msg", ""), 2000);
+  tick();
+};
+$("forget").onclick = async () => { await api("/app/frame/forget", {}); tick(); };
+$("check").onclick = () => run("status");
+$("install").onclick = () => run("install");
+$("uninstall").onclick = (e) => { if (twice("uninstall", e.target, "Remove Cuff? Click again")) run("uninstall"); };
+$("cancel").onclick = () => api("/app/frame/cancel", {});
+async function run(kind) {
+  const parts = ["recorder", "helper", "player"].filter((p) => $("p-" + p).checked);
+  const r = await api("/app/frame/run", {kind, parts, pair: $("p-pair").checked});
+  if (!r.ok) alert(r.message);
+  tick();
+}
+function showInstalled(status) {
+  const box = $("installed");
+  const entries = Object.entries(status || {});
+  box.replaceChildren(...(entries.length ? entries : [["Status", "Not checked yet"]]).flatMap(([k, v]) => [el("div", {textContent: k}), el("div", {textContent: v})]));
+}
+let jobShown = null;
+function showJob(job) {
+  $("job").classList.toggle("hidden", !job);
+  if (!job) return;
+  const names = {status: "Checking the headset", install: "Installing", uninstall: "Removing Cuff"};
+  $("job-title").textContent = (names[job.kind] || job.kind) + (job.running ? "…" : job.exit === 0 ? ": done" : `: stopped (${job.exit})`);
+  $("cancel").classList.toggle("hidden", !job.running);
+  const out = $("job-out"), atEnd = out.scrollTop + out.clientHeight >= out.scrollHeight - 4;
+  out.textContent = job.lines.join("\n");
+  if (atEnd || jobShown !== job.id) out.scrollTop = out.scrollHeight;
+  jobShown = job.id;
+  const p = job.prompt;
+  $("prompt").classList.toggle("hidden", !p);
+  if (!p) return;
+  $("prompt-text").textContent = p.text;
+  $("prompt-yesno").classList.toggle("hidden", p.kind !== "yesno");
+  $("prompt-input").classList.toggle("hidden", p.kind === "yesno");
+  const input = $("prompt-value");
+  if (input.dataset.kind !== p.kind) { input.type = p.kind === "password" ? "password" : "text"; input.dataset.kind = p.kind; input.value = ""; if (p.kind !== "yesno") input.focus(); }
+}
+document.querySelectorAll("[data-answer]").forEach((b) => b.onclick = async () => { await api("/app/frame/answer", {text: b.dataset.answer}); tick(); });
+async function sendAnswer() { const v = $("prompt-value"); await api("/app/frame/answer", {text: v.value}); v.value = ""; v.dataset.kind = ""; tick(); }
+$("prompt-send").onclick = sendAnswer;
+$("prompt-value").addEventListener("keydown", (e) => { if (e.key === "Enter") sendAnswer(); });
+
+// ------------------------------------------------------------ recordings
+let vstate = null, listedOnce = false;
+async function refreshVideos(fromHeadset) {
+  if (fromHeadset && state && state.frame.connected) {
+    const r = await api("/app/videos/refresh", {});
+    if (!r.httpOk) $("v-errors").textContent = r.message;
+    listedOnce = true;
+  } else if (fromHeadset && !listedOnce) {
+    // not connected yet: try again on the next tick
+  }
+  vstate = await api("/app/videos");
+  showVideos();
+}
+function showVideos() {
+  const v = vstate, s = v.settings;
+  $("v-folder").textContent = s.folder;
+  for (const [id, key] of [["v-auto", "auto"], ["v-auto-clips", "auto_clips"], ["v-auto-recordings", "auto_recordings"], ["v-delete", "delete_after"]])
+    if (document.activeElement !== $(id)) $(id).checked = s[key];
+  $("v-auto-opts").style.opacity = s.auto ? 1 : .5;
+  $("v-errors").textContent = v.errors.slice(-1)[0] || "";
+  const newOnes = v.videos.filter((x) => !x.downloaded);
+  $("ov-videos").textContent = v.listed_at ? `${v.videos.length} on the headset` : "Not listed yet";
+  $("ov-videos-sub").textContent = (s.auto ? "Downloading new ones automatically" : "Automatic downloads are off") +
+    (v.current ? ` · downloading ${v.current.path}` : "");
+  $("v-summary").textContent = v.listed_at ? `${v.videos.length} videos · ${newOnes.length} not downloaded · ${bytes(v.videos.reduce((a, x) => a + x.size, 0))} on the headset` : "Connect to the headset to see its videos.";
+  $("v-all").disabled = !newOnes.length;
+  const box = $("videos");
+  const cards = v.videos.map((x) => card(x, v));
+  box.replaceChildren(...cards);
+}
+const thumbs = {};
+function card(x, v) {
+  const when = new Date(x.mtime * 1000);
+  const thumb = el("div", {className: "thumb"});
+  if (Date.now() / 1000 - x.mtime > 20) {
+    if (state && state.thumb_key) {  // this run's key: thumbnails can't carry X-Cuff-App
+      thumbs[x.path] = thumbs[x.path] || el("img", {src: "/app/videos/thumb?key=" + encodeURIComponent(state.thumb_key) + "&path=" + encodeURIComponent(x.path), loading: "lazy", alt: ""});
+      thumbs[x.path].onerror = () => thumbs[x.path].remove();
+      thumb.append(thumbs[x.path]);
+    }
+  } else thumb.append("Recording…");
+  thumb.append(el("span", {className: "badge", textContent: x.kind === "clip" ? "Clip" : "Recording"}));
+  if (x.seconds != null) thumb.append(el("span", {className: "len", textContent: clock(x.seconds)}));
+  const body = el("div", {className: "vbody"},
+    el("div", {}, el("div", {textContent: when.toLocaleString([], {dateStyle: "medium", timeStyle: "short"})}),
+      el("div", {className: "sub", textContent: bytes(x.size) + (x.downloaded ? " · on this PC" : "")})));
+  const current = v.current && v.current.path === x.path, queued = v.queue.includes(x.path);
+  if (current) body.append(el("div", {className: "bar"}, el("i", {style: `width:${Math.round(100 * v.current.done / Math.max(1, v.current.size))}%`})));
+  const acts = el("div", {className: "actions"});
+  if (x.downloaded) {
+    const play = el("button", {className: "small primary", textContent: "Play"});
+    play.onclick = () => api("/app/videos/open", {path: x.path});
+    acts.append(play);
+  } else {
+    const dl = el("button", {className: "small", textContent: current ? "Downloading…" : queued ? "Queued" : "Download", disabled: current || queued});
+    dl.onclick = async () => { await api("/app/videos/download", {paths: [x.path]}); refreshVideos(false); };
+    acts.append(dl);
+  }
+  const del = el("button", {className: "small", textContent: "Delete"});
+  del.onclick = async () => {
+    if (!twice("del" + x.path, del, x.downloaded ? "Delete from headset?" : "Not on this PC! Delete?")) return;
+    const r = await api("/app/videos/delete", {path: x.path});
+    if (!r.ok) $("v-errors").textContent = r.message;
+    refreshVideos(false);
+  };
+  acts.append(del);
+  body.append(acts);
+  return el("div", {className: "video"}, thumb, body);
+}
+$("v-refresh").onclick = () => refreshVideos(true);
+$("v-all").onclick = async () => { await api("/app/videos/download", {paths: vstate.videos.filter((x) => !x.downloaded).map((x) => x.path)}); refreshVideos(false); };
+$("v-openfolder").onclick = () => api("/app/videos/open", {});
+$("v-choose").onclick = async () => { await api("/app/videos/choose", {}); refreshVideos(false); };
+for (const [id, key] of [["v-auto", "auto"], ["v-auto-clips", "auto_clips"], ["v-auto-recordings", "auto_recordings"], ["v-delete", "delete_after"]])
+  $(id).onchange = async () => { await api("/app/videos/settings", {[key]: $(id).checked}); refreshVideos(false); };
+
+// ------------------------------------------------------------ Cuff settings
+let sdata = null, changes = {}, section = null, recording = false;
+async function loadSettings() {
+  $("s-wait").textContent = "Loading from the headset…";
+  $("s-wait").classList.remove("hidden");
+  const r = await api("/app/settings");
+  if (!r.httpOk) { $("s-wait").textContent = (r.message || "Couldn't read the settings.") + " Connect on the Headset setup page."; $("s-body").classList.add("hidden"); return; }
+  sdata = r; recording = r.recording; changes = {};
+  section = section && r.sections.some((s) => s.id === section) ? section : r.sections[0].id;
+  $("s-wait").classList.add("hidden");
+  $("s-body").classList.remove("hidden");
+  drawSettings();
+}
+function value(sec, f) { return changes[sec.id] && f.key in changes[sec.id] ? changes[sec.id][f.key] : f.value; }
+function set(sec, f, v) {
+  changes[sec.id] = changes[sec.id] || {};
+  if (JSON.stringify(v) === JSON.stringify(f.value)) delete changes[sec.id][f.key]; else changes[sec.id][f.key] = v;
+  if (!Object.keys(changes[sec.id]).length) delete changes[sec.id];
+  drawSettings();
+}
+function drawSettings() {
+  const tabs = $("s-tabs");
+  tabs.replaceChildren(...sdata.sections.map((s) => {
+    const n = changes[s.id] ? Object.keys(changes[s.id]).length : 0;
+    const b = el("button", {className: s.id === section ? "on" : ""}, s.title, n ? el("span", {className: "n", textContent: "●"}) : null);
+    b.onclick = () => { section = s.id; drawSettings(); };
+    return b;
+  }));
+  const sec = sdata.sections.find((s) => s.id === section);
+  const box = $("s-section");
+  const head = el("div", {className: "actions", style: "margin-bottom:12px"}, el("h3", {className: "grow", textContent: sec.title, style: "margin:0;font-size:18px"}),
+    el("span", {className: "sub", textContent: sec.live ? "Takes effect at once" : "Takes effect when Cuff restarts"}));
+  const parts = [head];
+  if (sec.error) parts.push(el("div", {className: "msg bad", textContent: sec.error}));
+  const groups = new Map();
+  for (const f of sec.fields) { const g = f.group || ""; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(f); }
+  for (const [g, fields] of groups) {
+    const gbox = el("div", {className: "group"});
+    if (g) gbox.append(el("h3", {textContent: g}));
+    for (const f of fields) gbox.append(fieldRow(sec, f));
+    parts.push(gbox);
+  }
+  if (!sec.live) {
+    const rb = el("button", {textContent: "Restart Cuff now"});
+    rb.onclick = async () => {
+      if (recording && !confirm("A recording looks to be going. Restarting Cuff stops it. Restart anyway?")) return;
+      const r = await api("/app/frame/restart", {}); alert(r.message);
+    };
+    parts.push(el("div", {className: "actions"}, rb, el("span", {className: "sub", textContent: "Restarting reloads the charms; the panel blinks."})));
+  }
+  box.replaceChildren(...parts);
+  const n = Object.values(changes).reduce((a, c) => a + Object.keys(c).length, 0);
+  $("savebar").classList.toggle("hidden", !n);
+  $("save-text").textContent = `${n} unsaved change${n === 1 ? "" : "s"}`;
+}
+function fieldRow(sec, f) {
+  const v = value(sec, f);
+  const changed = changes[sec.id] && f.key in changes[sec.id];
+  let control;
+  if (f.type === "choice") {
+    control = el("div", {className: "seg"}, ...f.options.map(([val, label]) => {
+      const b = el("button", {textContent: label, className: String(v) === String(val) ? "on" : ""});
+      b.onclick = () => set(sec, f, val);
+      return b;
+    }));
+  } else if (f.type === "bool") {
+    control = el("button", {className: "switch" + (v ? " on" : ""), title: v ? "On" : "Off"});
+    control.onclick = () => set(sec, f, !v);
+  } else if (f.type === "number") {
+    const scale = f.scale || 1, show = (x) => `${+(x * scale).toFixed(scale >= 100 ? 1 : 0)}${f.unit === "°" ? "°" : " " + (f.unit || "")}`;
+    const val = el("span", {className: "val", textContent: show(v)});
+    const input = el("input", {type: "range", min: f.min, max: f.max, step: f.step, value: v});
+    input.oninput = () => { val.textContent = show(+input.value); };
+    input.onchange = () => set(sec, f, +input.value);
+    control = el("div", {className: "slider"}, input, val);
+  } else if (f.type === "slots") {
+    control = el("div", {className: "slots"}, ...v.map((cur, i) => {
+      const sel = el("select", {}, el("option", {value: "", textContent: "Empty"}),
+        ...f.options.map(([id, label]) => el("option", {value: id, textContent: label, selected: id === cur})));
+      sel.onchange = () => {
+        const next = [...v], pick = sel.value || null, at = next.indexOf(pick);
+        if (pick && at >= 0) next[at] = next[i];  // already in the row: they swap
+        next[i] = pick;
+        set(sec, f, next);
+      };
+      return el("div", {}, el("label", {textContent: `Slot ${i + 1}`}), sel);
+    }));
+  } else if (f.type === "order") {
+    const names = Object.fromEntries(f.options);
+    control = el("div", {className: "order"}, ...v.map((id, i) => {
+      const up = el("button", {className: "small", textContent: "↑", disabled: i === 0});
+      const down = el("button", {className: "small", textContent: "↓", disabled: i === v.length - 1});
+      const move = (d) => { const next = [...v]; [next[i], next[i + d]] = [next[i + d], next[i]]; set(sec, f, next); };
+      up.onclick = () => move(-1); down.onclick = () => move(1);
+      return el("div", {}, el("span", {textContent: names[id] || id}), up, down);
+    }));
+  } else {
+    control = el("input", {value: v ?? ""});
+    control.onchange = () => set(sec, f, control.value);
+  }
+  const row = el("div", {className: "field" + (changed ? " changed" : "")}, el("div", {className: "flabel", textContent: f.label}), control);
+  if (f.help) row.append(el("div", {className: "help", textContent: f.help}));
+  return row;
+}
+$("revert").onclick = () => { changes = {}; drawSettings(); };
+$("save").onclick = async () => {
+  $("save").disabled = true;
+  const r = await api("/app/settings", changes);
+  $("save").disabled = false;
+  if (!r.httpOk) return alert(r.message);
+  if (r.errors && r.errors.length) alert(r.errors.join("\n"));
+  const restart = r.restart;
+  await loadSettings();
+  if (restart && confirm("Some of these take effect when Cuff restarts. Restart it now?" + (recording ? "\n\nA recording looks to be going: restarting stops it." : ""))) {
+    const rr = await api("/app/frame/restart", {}); alert(rr.message);
+  }
+};
+
+// ------------------------------------------------------------ connection
+let linkState = null;
+async function refreshLink() {
+  linkState = await api("/app/link");
+  if (page === "connection") showLink();
+}
+$("c-refresh").onclick = async () => { $("c-when").textContent = "Measuring…"; await api("/app/link/refresh", {}); setTimeout(refreshLink, 6000); };
+function fig(value, unit, label) {
+  return el("div", {}, el("b", {textContent: value == null ? "–" : `${value}${unit}`}), el("span", {textContent: label}));
+}
+function kv(rows) {
+  return el("div", {className: "kv small"}, ...rows.filter(([, v]) => v != null && v !== "").flatMap(([k, v]) => [el("div", {textContent: k}), el("div", {textContent: v})]));
+}
+function head(title, g) {
+  return el("div", {className: "actions"}, el("h2", {className: "grow", style: "margin:0", textContent: title}),
+            g ? el("span", {className: "grade " + g, textContent: g}) : null);
+}
+function mbps(v) { return v == null ? null : `${Math.round(v)} Mbit/s`; }
+function showLink() {
+  const s = linkState, l = s.latest;
+  $("c-every").textContent = s.every_s;
+  $("c-when").textContent = l ? `Measured ${new Date(l.t * 1000).toLocaleTimeString()}` + (l.headset_reachable ? "" : " · the headset's own figures need Headset setup's connection") : "Measuring…";
+  // the dongle
+  const d = l && l.dongle, dbox = $("c-dongle");
+  if (!d) dbox.replaceChildren(head("Dongle"), el("div", {className: "sub", textContent: "The dongle isn't connected to the headset's own network."}));
+  else {
+    const pc = d.pc || {}, h = d.headset || {}, ap = d.ap || {}, p = d.ping || {};
+    const dl = h.delivery;  // between the last two samples: iw's own counts run from when the dongle joined
+    const retry = dl ? `${dl.retry_pct.toFixed(1)} % retried, ${dl.failed} failed (of ${dl.packets} sent since the last measurement)`
+      : h.tx_packets != null ? "measuring…" : null;
+    dbox.replaceChildren(head("Dongle", d.grade),
+      el("div", {className: "figures"}, fig(p.avg_ms, " ms", "round trip"), fig(p.jitter_ms, " ms", "jitter"), fig(p.loss_pct, " %", "lost"),
+         fig(h.signal, " dBm", "signal at the headset")),
+      kv([["Radio", [ap.band || pc.band, ap.channel ? `channel ${ap.channel}` : pc.channel && `channel ${pc.channel}`, ap.width].filter(Boolean).join(", ")],
+          ["Headset sends at", [mbps(h.tx_mbps), h.tx_detail].filter(Boolean).join(" · ")],
+          ["Headset receives at", [mbps(h.rx_mbps), h.rx_detail].filter(Boolean).join(" · ")],
+          ["The PC's adapter", [pc.rssi != null && `${pc.rssi} dBm`, pc.signal_pct != null && `${pc.signal_pct} %`, mbps(pc.rx_mbps)].filter(Boolean).join(", ")],
+          ["USB", d.usb ? d.usb + (d.usb !== "USB 3" ? " (too slow for a full stream: use a USB 3 port)" : "") : null],
+          ["Delivery", retry], ["Connected for", h.connected_s != null ? clock(h.connected_s) : null]]));
+  }
+  // your network
+  const n = l && l.lan, nbox = $("c-lan");
+  if (!n) nbox.replaceChildren(head("Your network"), el("div", {className: "sub", textContent: "The headset isn't on your Wi-Fi, or hasn't been heard from."}));
+  else {
+    const w = n.headset || {}, p = n.ping || {};
+    nbox.replaceChildren(head("Your network", n.grade),
+      el("div", {className: "figures"}, fig(p.avg_ms, " ms", "round trip"), fig(p.jitter_ms, " ms", "jitter"), fig(p.loss_pct, " %", "lost"),
+         fig(w.signal, " dBm", "signal at the headset")),
+      kv([["Network", w.ssid], ["Radio", w.band], ["Headset sends at", [mbps(w.tx_mbps), w.tx_detail].filter(Boolean).join(" · ")],
+          ["Headset receives at", mbps(w.rx_mbps)], ["Headset's address", n.host]]));
+  }
+  // the stream
+  const st = l && l.stream, sbox = $("c-stream");
+  if (!st || !st.connected) sbox.replaceChildren(head("Steam Link stream"), el("div", {className: "sub", textContent: "Not streaming right now. While SteamVR streams to the headset, its own view of the link shows here."}));
+  else sbox.replaceChildren(head("Steam Link stream", st.stalls || st.step_downs ? "poor" : st.held || st.bad_link ? "fair" : "good"),
+      el("div", {className: "figures"}, fig(st.estimate, " Mbit/s", "SteamVR's estimate"), fig(st.capacity_p10, " Mbit/s", "carried 90 % of the time"),
+         fig(st.bitrate, " Mbit/s", "video bitrate")),
+      kv([["In the last minute", `${st.held} frames held back (worst ${st.held_worst_ms ?? "–"} ms), ${st.stalls} stalls, ${st.step_downs} bitrate step-downs, ${st.bad_link} bad-link events`],
+          ["Also", `${st.resets} stream restarts, encoder late ${st.encoder_late} times`], ["Automatic bitrate", st.auto == null ? null : st.auto ? "on" : "off"]]));
+  chart("c-ping", s.history, [["dongle_ping", "var(--accent)"], ["lan_ping", "var(--blue)"]], false);
+  chart("c-signal", s.history, [["dongle_signal", "var(--accent)"], ["wifi_signal", "var(--blue)"]], true);
+}
+function chart(id, hist, series, signal) {
+  const svg = $(id), W = 400, H = 110, pad = 6, ns = "http://www.w3.org/2000/svg";
+  const vals = hist.flatMap((h) => series.map(([k]) => h[k])).filter((v) => v != null);
+  svg.replaceChildren();
+  if (vals.length < 1) return;
+  let lo = signal ? Math.min(-80, ...vals) : 0, hi = signal ? Math.max(-30, ...vals) : Math.max(10, ...vals);
+  const t0 = hist[0].t, t1 = Math.max(hist[hist.length - 1].t, t0 + 1);
+  const x = (t) => pad + (W - 2 * pad) * (t - t0) / (t1 - t0), y = (v) => H - pad - (H - 2 * pad) * (v - lo) / (hi - lo);
+  for (const v of [lo, hi]) {
+    const t = document.createElementNS(ns, "text");
+    Object.entries({x: W - pad, y: y(v) + (v === hi ? 10 : -3), "text-anchor": "end", "font-size": 10, fill: "var(--dim)"}).forEach(([k, a]) => t.setAttribute(k, a));
+    t.textContent = Math.round(v); svg.append(t);
+  }
+  for (const [key, colour] of series) {
+    const pts = hist.filter((h) => h[key] != null).map((h) => `${x(h.t).toFixed(1)},${y(h[key]).toFixed(1)}`);
+    if (!pts.length) continue;
+    const line = document.createElementNS(ns, "polyline");
+    Object.entries({points: pts.join(" "), fill: "none", stroke: colour, "stroke-width": 2, "stroke-linejoin": "round"}).forEach(([k, a]) => line.setAttribute(k, a));
+    svg.append(line);
+  }
+}
+
+// ------------------------------------------------------------ updates
+function showUpdates(u) {
+  $("ov-app").textContent = u.git ? "Development copy" : u.newer ? `Update to ${u.latest.version}` : `Version ${u.installed}`;
+  $("ov-app-sub").textContent = u.installing || u.error || (u.git ? "A git checkout: it updates with git pull."
+    : u.newer ? "A newer version is out. Updating restarts Cuff for PC." : u.checked_at ? "Up to date." : "");
+  $("up-install").classList.toggle("hidden", !u.newer || !!u.installing);
+  $("up-check").classList.toggle("hidden", u.git);
+}
+$("up-check").onclick = async () => { $("ov-app-sub").textContent = "Checking…"; await api("/app/update/check", {}); tick(); };
+$("up-install").onclick = async () => { const r = await api("/app/update/install", {}); if (!r.ok) alert(r.message); tick(); };
+
+// ------------------------------------------------------------ typing
+let typed = 0, buffer = "", flushTimer = null;
+const KEYMAP = {Enter: "enter", Backspace: "backspace", Tab: "tab", Escape: "escape", Delete: "delete",
+                ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down", Home: "home", End: "end"};
+function showTyping(t) {
+  if (page === "type") api("/app/typing/open", {});
+  $("t-dot").className = "dot" + (t.headset_polling ? " on" : t.active ? " warn" : "");
+  $("t-status").textContent = t.headset_polling ? "The headset is listening." + (t.pending ? ` ${t.pending} waiting…` : "")
+    : t.active ? "Waiting for the headset to listen (a few seconds)…" : "Open this page, or press Ctrl+Alt+V, and the headset starts listening.";
+}
+function counted() { $("t-count").textContent = `${typed} key${typed === 1 ? "" : "s"} sent`; }
+// One send at a time, in order, so a key never overtakes the text typed before it.
+let chain = Promise.resolve();
+function post(body) { chain = chain.then(() => api("/app/typing", body)).catch(() => {}); return chain; }
+function flush() {
+  clearTimeout(flushTimer); flushTimer = null;
+  if (!buffer) return chain;
+  const text = buffer; buffer = "";
+  return post({text});
+}
+function sendKey(key) { flush(); return post({key}); }
+$("t-box").addEventListener("keydown", (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;  // Ctrl+V comes as a paste
+  if (KEYMAP[e.key]) { e.preventDefault(); typed++; sendKey(KEYMAP[e.key]); }
+  else if (e.key.length === 1) { e.preventDefault(); buffer += e.key; typed++; flushTimer = flushTimer || setTimeout(flush, 60); }
+  counted();
+});
+$("t-box").addEventListener("paste", (e) => {
+  e.preventDefault();
+  const text = e.clipboardData.getData("text");
+  if (text) { buffer += text; typed += text.length; flush(); counted(); }
+});
+$("t-send").onclick = async () => {
+  const text = $("t-text").value;
+  if (!text) return;
+  const r = await api("/app/typing", {text});
+  if (r.ok && $("t-enter").checked) await api("/app/typing", {key: "enter"});
+  msg("t-msg", r.message, r.ok);
+  if (r.ok) $("t-text").value = "";
+};
+$("t-clip").onclick = async () => { const r = await api("/app/typing/clipboard", {}); msg("t-msg", r.message, r.ok); };
+
+show(location.hash.slice(1) || "overview");
+setInterval(tick, 2000);
+</script>
+</body>
+</html>

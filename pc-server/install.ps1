@@ -4,8 +4,8 @@
 #   powershell -ExecutionPolicy Bypass -File pc-server\install.ps1
 # It needs uv (https://docs.astral.sh/uv/): winget install --id=astral-sh.uv -e
 # Steps: uv sync; a logon task that starts it hidden (install-autostart.ps1); in one admin
-# prompt, the firewall rules (firewall.ps1); then it starts the app and pairs the headset
-# (pair.ps1: type the code the wrist panel shows).
+# prompt, the firewall rules (firewall.ps1); then it starts the app and opens its window, where
+# Headset setup installs Cuff on the headset and pairs it.
 # Remove: Unregister-ScheduledTask -TaskName "Cuff for PC" -Confirm:$false
 #         Remove-NetFirewallRule -DisplayName "Cuff for PC*"    (as admin)
 param([switch]$NoFirewall)
@@ -33,4 +33,5 @@ $up = $false
 foreach ($i in 1..120) {
     try { Invoke-RestMethod "http://127.0.0.1:8765/health" -TimeoutSec 2 | Out-Null; $up = $true; break } catch { Start-Sleep 2 }
 }
-if ($up) { & (Join-Path $PSScriptRoot "pair.ps1") } else { Write-Host "Still starting; pair later with pair.ps1." }
+# Then the app's window, on Headset setup: it installs Cuff on the headset and pairs it.
+if ($up) { uv run app.py --open } else { Write-Host "Still starting; open Cuff for PC from the Start menu when it's ready." }

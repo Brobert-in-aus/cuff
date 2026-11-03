@@ -422,7 +422,8 @@ class RoomView:
     the dashboard and the mailbox turn Room View on and off over the game, so the compositor's
     own log is read instead: its system layer logs "room view for scene apps was enabled" and
     "room view was turned off". The log is one file per SteamVR run; on opening, the last such
-    line in it gives the state so far."""
+    line in it gives the state so far. The log has no line for a plain turn-off (it logs one only
+    when the compositor is forcing Room View), so Cuff's own presses are noted too."""
 
     ON, OFF = "room view for scene apps was enabled", "room view was turned off"
 
@@ -430,6 +431,7 @@ class RoomView:
         self.settings, self.compositor = settings, compositor
         self.path = os.path.expanduser(log_path)
         self.in_game = False  # the log's state, from its latest line
+        self.ignore_on_until = 0.0  # "enabled" lines before this (monotonic) are a blink's
         self.log, self.ino = None, None
         self._open()
 
@@ -449,9 +451,19 @@ class RoomView:
     def _read(self):
         for line in self.log.readlines():
             if self.ON in line:
-                self.in_game = True
+                if time.monotonic() >= self.ignore_on_until:
+                    self.in_game = True
             elif self.OFF in line:
                 self.in_game = False
+
+    def note(self, shown, settle=0.0):
+        """A press SteamVR accepted: in a game, take it as the state until the log says otherwise.
+        The log is read through first, so lines from before the press (recenter's blink turning
+        Room View on) can't override it on the next poll; settle also ignores an "enabled" line that
+        turns up within that many seconds, in case the compositor is slow to log it."""
+        self._follow()
+        self.in_game = shown
+        self.ignore_on_until = time.monotonic() + settle if not shown else 0.0
 
     def _setting(self):
         try:
@@ -465,15 +477,20 @@ class RoomView:
         except (AttributeError, openvr.error_code.OpenVRError):
             return False
 
-    def shown(self):
-        """Call a few times a second: it also follows the log."""
+    def _follow(self):
+        """Reads what the log has gained since last time."""
         try:
             if self.log is None or os.stat(self.path).st_ino != self.ino:
                 self._open()  # a new SteamVR run starts a new log
+                return
         except OSError:
             pass
         if self.log is not None:
             self._read()
+
+    def shown(self):
+        """Call a few times a second: it also follows the log."""
+        self._follow()
         return self.in_game if self._game() else self._setting()
 
 

@@ -13,6 +13,9 @@ A charm is a Python package folder with a charm.toml:
   type = "text"                        text, bool, int or choice (with choices = [...])
   default = "Steam Frame"
   label = "Spotify Connect speaker"
+  [quick.play]                         a quick-row button users can choose (quickrow.py):
+  label = "Play/pause"                 press("quick:play"), and quick("play") for its look
+  glyph = "play"
 
 Bundled charms live in charms/ next to this package; more folders can be added with
 CUFF_CHARM_PATH (os.pathsep-separated), which is how private charms are loaded without
@@ -43,6 +46,8 @@ import time
 import tomllib
 
 from . import config
+from . import quickrow
+from .atomic import atomic_write_json
 
 API = 1
 BUNDLED = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "charms")
@@ -54,21 +59,33 @@ SETTINGS_DIR = os.path.join(os.path.dirname(config.CONFIG_FILE), "charms")
 
 
 def load_choices():
-    """{"disabled": [ids], "approved": [ids]}, with config.toml's approved added."""
+    """{"disabled": [ids], "approved": [ids], "order": [ids] or None}, with config.toml's
+    approved added. order is the tab order set from Cuff for PC; it wins over config.toml's tabs."""
     try:
         with open(CHOICES_FILE) as f:
             choices = json.load(f)
-    except (OSError, ValueError):
+        if not isinstance(choices, dict):
+            raise ValueError("not an object")
+    except FileNotFoundError:
+        choices = {}
+    except (OSError, ValueError) as e:
+        print(f"charms: {CHOICES_FILE}: {e!r}; using the defaults", file=sys.stderr, flush=True)
         choices = {}
     return {"disabled": list(choices.get("disabled", [])),
-            "approved": sorted(set(choices.get("approved", [])) | set(config.CONFIG.get("approved", [])))}
+            "approved": sorted(set(choices.get("approved", [])) | set(config.CONFIG.get("approved", []))),
+            "order": choices.get("order") if isinstance(choices.get("order"), list) else None}
 
 
 def save_choices(choices):
+    """Saves load_choices()-shaped choices. config.toml's approved are left out of the file (they
+    come from config.toml each time), so removing one there takes its approval away."""
+    from_config = set(config.CONFIG.get("approved", []))
+    out = {"disabled": list(choices.get("disabled", [])),
+           "approved": sorted(set(choices.get("approved", [])) - from_config)}
+    if choices.get("order"):
+        out["order"] = list(choices["order"])
     try:
-        os.makedirs(os.path.dirname(CHOICES_FILE), exist_ok=True)
-        with open(CHOICES_FILE, "w") as f:
-            json.dump(choices, f, indent=1)
+        atomic_write_json(CHOICES_FILE, out, indent=1)
     except OSError as e:
         print(f"charms: saving choices: {e!r}", file=sys.stderr, flush=True)
 
@@ -90,11 +107,14 @@ class Context:
         self.permissions = set(permissions)
         self.shown = False
         self.settings = dict(settings or {})
+        path = os.path.join(SETTINGS_DIR, f"{charm_id}.json")
         try:
-            with open(os.path.join(SETTINGS_DIR, f"{charm_id}.json")) as f:
+            with open(path) as f:
                 self.settings.update(json.load(f))
-        except (OSError, ValueError):
+        except FileNotFoundError:
             pass
+        except (OSError, ValueError, TypeError) as e:
+            print(f"charms: {path}: {e!r}; using charm.toml's defaults", file=sys.stderr, flush=True)
 
     def _need(self, permission):
         if permission not in self.permissions and self.id != "settings":
@@ -138,7 +158,8 @@ class Context:
         return pc.url() if pc else None
 
     def pc_headers(self):
-        """The headers a request to Cuff for PC needs (its pairing token)."""
+        """The headers a request to Cuff for PC needs: a marker the signing opener (pc.py)
+        replaces with a signature, so the pairing token itself never leaves the headset."""
         self._need("pc")
         pc = self.services and self.services.pc
         return pc.headers() if pc else {}
@@ -169,6 +190,16 @@ class Charm:
 
     def press(self, button_id):
         """A button on the page was touched."""
+
+    def quick(self, button):
+        """How a quick-row button from charm.toml's [quick.<button>] looks now: a dict of
+        "glyph", "style" and "text" (quickrow.py), or None for its plain look. Asked on every
+        redraw; call changed() when it changes."""
+        return None
+
+    def reload(self):
+        """Settings changed from outside (Cuff for PC, through charm.toml's options module):
+        read them again. Runs on a thread of its own."""
 
     def badge(self):
         """A mark on this charm's tab, seen while another tab is open: None, "dot", or a
@@ -245,6 +276,7 @@ def load(changed, services=None):
     choices = load_choices()
     found = {}
     CATALOG.clear()
+    quickrow.OFFERED.clear()
     for folder in _folders():
         entry = {"id": None, "name": os.path.basename(folder), "folder": folder, "permissions": [],
                  "powerful": [], "status": "failed", "error": None}
@@ -267,6 +299,11 @@ def load(changed, services=None):
             if charm_id in choices["disabled"]:
                 entry["status"] = "off"
                 continue
+            needs = manifest.get("requires")  # a program the charm drives; off without it
+            if needs and not os.path.exists(os.path.expanduser(needs)):
+                entry["status"] = "not installed"
+                print(f"charm {charm_id}: off, {needs} isn't installed", flush=True)
+                continue
             bundled = os.path.dirname(os.path.abspath(folder)) == os.path.abspath(BUNDLED)
             if entry["powerful"] and not bundled and charm_id not in choices["approved"]:
                 entry["status"] = "needs approval"
@@ -274,16 +311,18 @@ def load(changed, services=None):
                       flush=True)
                 continue
             defaults = {k: v.get("default") for k, v in manifest.get("settings", {}).items()}
+            quickrow.declared(manifest)  # a malformed [quick] table fails the charm here
             cls = _import(folder, charm_id, manifest["entry"])
             charm = cls(Context(charm_id, folder, changed, services, perms, defaults))
             charm.label = manifest.get("tab", {}).get("label", entry["name"])
             found[charm_id] = charm
+            quickrow.offer(charm_id, manifest)
             entry["status"] = "on"
             print(f"charm {charm_id}: loaded from {folder}", flush=True)
         except Exception as e:  # noqa: BLE001 - one bad charm mustn't stop the rest
             entry["error"] = repr(e)
             print(f"charm {folder}: not loaded: {e!r}", file=sys.stderr, flush=True)
-    order = [i for i in config.CONFIG.get("tabs", []) if i in found]
+    order = [i for i in choices["order"] or config.CONFIG.get("tabs", []) if i in found]
     order += [i for i in found if i not in order]
     tabs = {i: found[i] for i in order}
     from . import settings  # the core's own tab, always last

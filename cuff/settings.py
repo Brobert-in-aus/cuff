@@ -8,6 +8,9 @@ It's a charm like any other, but part of the core, since it changes the core's o
   Charms  each charm with what it's allowed to do, turned on or off, or approved when it
           asks for a powerful permission; Restart Cuff applies the changes (charms load at
           startup), as systemd starts it again
+  Alerts  which ways alerts get your attention, and the low battery levels
+  Quick   the quick row's six slots: tap a slot, then the button for it (one already in
+          the row swaps places with it), or Empty. Saved at once (quickrow.py)
 Each slider row is a label with its value, - and + buttons, and a bar whose segments set
 the value directly. Changes are pending until Apply: meanwhile the core shows a translucent
 preview of the panel where it will go, so the panel doesn't move under the finger. Cancel
@@ -22,10 +25,11 @@ import time
 from PIL import Image, ImageDraw
 
 from . import charm as charms
-from . import ui
+from . import quickrow, ui
 from . import widgets as w
 from .charm import Charm, Context
 from .placement import PAGES, PLACEMENT, SLIDERS
+from .services import Prefs
 
 ID = "settings"
 ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
@@ -48,17 +52,14 @@ ACTIONS = {"reset": ((16, 76), "Reset"), "cancel": ((84, 150), "Cancel"), "apply
 s, FONTS = ui.s, ui.FONTS
 
 
-SUBPAGES = list(PAGES) + ["Charms", "Alerts"]
+SUBPAGES = list(PAGES) + ["Charms", "Alerts", "Quick"]
+WIDGET_PAGES = ("Charms", "Alerts", "Quick")  # widget trees; the others are drawn by hand
 ALERT_SWITCHES = [("haptic", "Buzz"), ("sound", "Chime"), ("orb", "Glow"), ("power", "Charging stops")]
-BATTERY_DEVICES = [("headset", "Headset"), ("controllers", "Controllers"), ("headphones", "Headphones")]
+BATTERY_DEVICES = Prefs.DEVICE_LABELS
 
 
 def subtab_buttons():
-    names = SUBPAGES
-    x0, x1, gap = 16, 224, 4
-    w = (x1 - x0 - gap * (len(names) - 1)) / len(names)
-    return {f"sub:{n}": (x0 + i * (w + gap), SUBTAB_Y[0], x0 + i * (w + gap) + w, SUBTAB_Y[1])
-            for i, n in enumerate(names)}
+    return {f"sub:{n}": (a, SUBTAB_Y[0], b, SUBTAB_Y[1]) for n, (a, b) in zip(SUBPAGES, ui.spans(SUBPAGES, 16, 224))}
 
 
 def slider_buttons(page):
@@ -84,11 +85,14 @@ class Settings(Charm):
         self.loaded_choices = charms.load_choices()  # as the charms were loaded
         self.charm_page = 0
         self.alerts_view = None  # "battery" for the low battery levels
+        self.quick_slot = 0  # the quick row's slot being chosen for
 
     def page(self):
-        """Charms and Alerts are widget trees; the sliders are drawn by hand (draw())."""
+        """Charms, Alerts and Quick are widget trees; the sliders are drawn by hand (draw())."""
         if self.sub == "Alerts":
             return self._alerts_page()
+        if self.sub == "Quick":
+            return self._quick_page()
         if self.sub != "Charms":
             return None
         choices = charms.load_choices()
@@ -102,7 +106,8 @@ class Settings(Charm):
             needs = entry["powerful"] and not approved and entry["status"] == "needs approval"
             detail = ", ".join(perms) if perms else "no permissions"
             status = ("failed: see the log" if entry["status"] == "failed" else
-                      "off" if disabled else "needs approval" if needs else "on")
+                      "off" if disabled else "needs approval" if needs else
+                      "not installed" if entry["status"] == "not installed" else "on")
             button = (w.Button(f"approve:{cid}", "Approve", style="warn", width=56) if needs and not disabled else
                       w.Button(f"toggle:{cid}", "Turn on" if disabled else "Turn off", width=56,
                                style="active" if disabled else "normal"))
@@ -170,8 +175,28 @@ class Settings(Charm):
                          w.Text("Timers, break reminders, charging and low battery", size="tiny",
                                 colour="dim", align="center")], gap=5)
 
+    def _quick_page(self):
+        slots = quickrow.row()
+        sel = self.quick_slot
+        cells = []
+        for i, button in enumerate(slots):
+            g = quickrow.glyph_of(button) if button else None
+            cells.append(w.Button(f"qslot:{i}", None if g else (quickrow.label(button)[:2] if button else ""), glyph=g,
+                                  style="active" if i == sel else "normal" if button else "off"))
+        chosen = slots[sel]
+        picks = [w.Button(f"qpick:{bid}", label, style="active" if bid == chosen else "normal")
+                 for bid, label, _ in quickrow.offered()]
+        armed = time.monotonic() < self.reset_armed
+        picks += [w.Button("qpick:", "Empty", style="active" if chosen is None else "normal"),
+                  w.Button("qreset", "Defaults?" if armed else "Defaults", style="warn" if armed else "normal")]
+        hint = f"Slot {sel + 1}: {quickrow.label(chosen) if chosen else 'empty'}. Pick its button:"
+        return w.Column([w.Tabs([(n, n) for n in SUBPAGES], selected=self.sub, id="sub"),
+                         w.Row(cells, height=24, gap=4),
+                         w.Text(hint, size="tiny", colour="dim", align="center"),
+                         w.Grid(picks, cols=3 if len(picks) <= 9 else 4, row_height=18, gap=3)], gap=4)
+
     def buttons(self):
-        if self.sub in ("Charms", "Alerts"):
+        if self.sub in WIDGET_PAGES:
             return super().buttons()  # from the widget layout
         actions = {f"act:{k}": (x0, ACTION_Y[0], x1, ACTION_Y[1]) for k, ((x0, x1), _) in ACTIONS.items()}
         wrist = {f"wrist:{h}": (x0, WRIST_Y, x1, WRIST_Y + ROW_H) for h, (x0, x1) in WRIST_X.items()}
@@ -190,6 +215,19 @@ class Settings(Charm):
                 timer.start()
         elif kind == "sub":
             self.sub, self.alerts_view = rest, None
+        elif kind == "qslot":
+            self.quick_slot = int(rest)
+        elif kind == "qpick":
+            quickrow.place(self.quick_slot, rest or None)
+            self.ctx.changed()
+        elif button_id == "qreset":
+            if armed:
+                quickrow.reset()
+            else:
+                self.reset_armed = time.monotonic() + RESET_CONFIRM_S
+                timer = threading.Timer(RESET_CONFIRM_S + 0.05, self.ctx.changed)  # back to "Defaults"
+                timer.daemon = True
+                timer.start()
         elif kind == "alert" and self.ctx.services:
             self.ctx.services.prefs.toggle(rest)
         elif kind == "alerts":
@@ -218,8 +256,7 @@ class Settings(Charm):
                 choices["disabled"].remove(rest)
             else:
                 choices["disabled"].append(rest)
-            charms.save_choices({"disabled": choices["disabled"],
-                                 "approved": [a for a in choices["approved"] if a not in charms.config.CONFIG.get("approved", [])]})
+            charms.save_choices(choices)  # leaves config.toml's approved out
         elif button_id == "restart":
             print("settings: restarting Cuff to apply charm changes", flush=True)
             threading.Timer(0.3, os.kill, (os.getpid(), signal.SIGTERM)).start()  # systemd restarts it

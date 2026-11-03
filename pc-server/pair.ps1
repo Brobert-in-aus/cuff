@@ -5,8 +5,9 @@
 param([int]$Port = 8765, [switch]$Console)
 $ErrorActionPreference = "Stop"
 $base = "http://127.0.0.1:$Port"
+$app = @{ "X-Cuff-App" = "1" }  # the app's guard: what a web page can't send (appapi.py)
 try {
-    Invoke-RestMethod -Method Post "$base/pair/open" | Out-Null
+    Invoke-RestMethod -Method Post "$base/pair/open" -Headers $app | Out-Null
 } catch {
     Write-Host "Cuff for PC isn't running. Start it with: Start-ScheduledTask -TaskName 'Cuff for PC'"
     exit 1
@@ -53,7 +54,7 @@ while ($true) {
     $code = Ask-Code $note
     if (-not $code) { exit 0 }
     try {
-        $r = Invoke-RestMethod -Method Post "$base/pair/confirm" -ContentType "application/json" `
+        $r = Invoke-RestMethod -Method Post "$base/pair/confirm" -Headers $app -ContentType "application/json" `
             -Body (@{ code = $code.Trim() } | ConvertTo-Json)
         Write-Host "Paired with $($r.name)."
         if (-not $Console) {

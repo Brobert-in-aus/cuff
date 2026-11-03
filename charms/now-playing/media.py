@@ -25,8 +25,11 @@ MPRIS = "org.mpris.MediaPlayer2."
 PLAYER_IFACE = "org.mpris.MediaPlayer2.Player"
 ART_PX = 128
 IDLE = {"title": "Nothing playing", "artist": "", "playing": False,
-        "player": None, "source": None, "spotify": False, "art": None, "volume": None}
+        "player": None, "source": None, "spotify": False, "art": None, "volume": None,
+        "position": None, "length": None, "can_seek": False, "rate": None, "rates": None,
+        "players": [], "chosen": False}
 VOLUME_STEP = 0.05
+SKIP_S = 15  # the back and forward buttons
 
 
 # ---------------------------------------------------------------- D-Bus / MPRIS
@@ -108,10 +111,10 @@ def player_rank(name, status):
     return ({"Playing": 0, "Paused": 1}.get(status, 2), kind)
 
 
-def find_player():
-    """Return (bus, name, props) of the best MPRIS player, or None. Soloist counts only while
-    it's Spotify's active device."""
-    best = None
+def list_players():
+    """Every MPRIS player worth showing: [(bus, name, props)]. Soloist counts only while it's
+    Spotify's active device."""
+    found = []
     for bus in buses():
         try:
             names = [n for n in bus.list_names() if n.startswith(MPRIS)]
@@ -126,10 +129,20 @@ def find_player():
                 props = obj.GetAll(PLAYER_IFACE, dbus_interface="org.freedesktop.DBus.Properties")
             except dbus.DBusException:
                 continue
-            rank = player_rank(name, str(props.get("PlaybackStatus", "")))
-            if best is None or rank < best[0]:
-                best = (rank, bus, name, props)
-    return best[1:] if best else None
+            found.append((bus, name, props))
+    return found
+
+
+def find_player(chosen=None, players=None):
+    """Return (bus, name, props) of the player to show: `chosen` (a bus name) while it's
+    there, else the best ranked; or None."""
+    players = list_players() if players is None else players
+    for p in players:
+        if p[1] == chosen:
+            return p
+    if not players:
+        return None
+    return min(players, key=lambda p: player_rank(p[1], str(p[2].get("PlaybackStatus", ""))))
 
 
 # ---------------------------------------------------------------- album art
@@ -177,16 +190,20 @@ class Media(threading.Thread):
     (source: "Spotify" or the player's own name; spotify: a Spotify Connect speaker here is the
     player; art is a PIL image or None; volume is the player's own 0-1, or None if it has none)."""
 
-    def __init__(self, on_change):
+    def __init__(self, on_change, shown=lambda: True):
         super().__init__(daemon=True, name="media")
         self.on_change = on_change
+        self.shown = shown  # the position only updates while the page shows, not to redraw for nothing
+        self.chosen = None  # a bus name picked on the player page, while it's there
+        self._track = None  # the current track's mpris:trackid, for SetPosition
         self.commands = queue.Queue()
         self.state = self.idle()
         self._art_url, self._art = None, None
         self._identities = {}  # bus name -> its MPRIS Identity
 
     def command(self, cmd):
-        """play-pause | next | previous | volume-up | volume-down"""
+        """play-pause | next | previous | volume-up | volume-down | seek-back | seek-forward |
+        goto:<0-1> | rate:<rate> | player:<name after org.mpris.MediaPlayer2.> | player:auto"""
         self.commands.put(cmd)
 
     def run(self):
@@ -206,11 +223,30 @@ class Media(threading.Thread):
                 print(f"media: {e!r}", file=sys.stderr, flush=True)
 
     def _run(self, cmd):
-        found = find_player()
+        if cmd.startswith("player:"):
+            self.chosen = None if cmd == "player:auto" else MPRIS + cmd[7:]
+            return
+        found = find_player(self.chosen)
         if found is None:
             return
         bus, name, props = found
         obj = bus.get_object(name, "/org/mpris/MediaPlayer2")
+        prop = "org.freedesktop.DBus.Properties"
+        if cmd in ("seek-back", "seek-forward"):
+            if props.get("CanSeek", False):
+                obj.Seek(dbus.Int64((SKIP_S if cmd == "seek-forward" else -SKIP_S) * 1_000_000),
+                         dbus_interface=PLAYER_IFACE)
+            return
+        if cmd.startswith("goto:"):
+            length = int(props.get("Metadata", {}).get("mpris:length", 0) or 0)
+            if props.get("CanSeek", False) and length > 0 and self._track:
+                position = int(min(max(float(cmd[5:]), 0.0), 1.0) * length)
+                obj.SetPosition(dbus.ObjectPath(self._track), dbus.Int64(position), dbus_interface=PLAYER_IFACE)
+            return
+        if cmd.startswith("rate:"):
+            if "Rate" in props:
+                obj.Set(PLAYER_IFACE, "Rate", dbus.Double(float(cmd[5:])), dbus_interface=prop)
+            return
         if cmd in ("volume-up", "volume-down"):
             # The player's own volume (spotifyd: the same one as the Spotify app's slider),
             # separate from the system sink. Players without a writable Volume ignore this.
@@ -227,7 +263,23 @@ class Media(threading.Thread):
     def idle():
         """The state with nothing playing: a hint to pick Soloist, only if it's set up here."""
         name = soloist_name()
-        return {**IDLE, **({"artist": f"Pick “{name}” in the Spotify app"} if name else {})}
+        return {**IDLE, **({"artist": f"Pick “{name}” in Spotify"} if name else {})}
+
+    def _timing(self, props, md, players, name):
+        """Position and length (whole seconds), seeking, speed, and the players to pick from."""
+        length = int(md.get("mpris:length", 0) or 0) / 1e6 or None
+        try:
+            position = int(props.get("Position", 0)) // 1_000_000
+        except (TypeError, ValueError):
+            position = None
+        rates = None
+        if "Rate" in props:
+            rates = (float(props.get("MinimumRate", 1.0)), float(props.get("MaximumRate", 1.0)))
+        return {"position": position, "length": length, "can_seek": bool(props.get("CanSeek", False)),
+                "rate": float(props["Rate"]) if "Rate" in props else None, "rates": rates,
+                "players": [(n[len(MPRIS):], "Spotify" if is_spotify(n) else self._identity(b, n),
+                             str(p.get("PlaybackStatus", "")) == "Playing") for b, n, p in players],
+                "chosen": self.chosen == name}
 
     def _identity(self, bus, name):
         """The player's own name ("Chromium", "VLC"), from MPRIS Identity; else its bus name."""
@@ -241,12 +293,17 @@ class Media(threading.Thread):
         return self._identities[name]
 
     def _poll(self):
-        found = find_player()
+        players = list_players()
+        found = find_player(self.chosen, players)
+        if self.chosen and (found is None or found[1] != self.chosen):
+            self.chosen = None  # it went away: back to the best ranked
         if not found:
             state = self.idle()
         else:
             bus, name, props = found
             md = props.get("Metadata", {})
+            track = md.get("mpris:trackid")
+            self._track = str(track) if track else None
             artists = md.get("xesam:artist", [])
             artist = ", ".join(str(a) for a in artists) if isinstance(artists, list) else str(artists)
             url = str(md.get("mpris:artUrl", ""))
@@ -269,7 +326,10 @@ class Media(threading.Thread):
                      "artist": " ".join((artist or str(md.get("xesam:album", ""))).split()),
                      "playing": str(props.get("PlaybackStatus", "")) == "Playing",
                      "player": name[len(MPRIS):], "source": source, "spotify": spotify, "art": self._art,
-                     "volume": float(props["Volume"]) if "Volume" in props else None}
+                     "volume": float(props["Volume"]) if "Volume" in props else None,
+                     **self._timing(props, md, players, name)}
+        if not self.shown():
+            state["position"] = self.state.get("position")  # no redraw a second while hidden
         if state != self.state:
             self.state = state
             self.on_change()

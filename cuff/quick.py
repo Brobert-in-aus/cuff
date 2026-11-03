@@ -6,9 +6,10 @@ never stalls the overlay loop.
   virtual mic downstream of it still gets through.
 - Passthrough runs in app.py: SteamVR "Room View" through SteamVR's own mailbox
   (vr.Mailbox), with its real state read back from SteamVR's settings.
-- Recenter: vrcmd --recenter. (Screenshot runs in app.py: OpenVR's
+- Recenter runs in app.py through the mailbox (the compositor's own reset); vrcmd
+  --recenter here is its fallback. (Screenshot runs in app.py: OpenVR's
   TakeStereoScreenshot, as vrcmd --screenshot does nothing on the Frame.)
-- Keyboard runs in app.py: ShowKeyboardForOverlay on the visible window's overlay.
+- Charms' buttons (the Record charm's record button) go to the charm (quickrow.py).
 - Dictation server: the [dictation] /health URLs, so the button can show it's down.
 """
 import queue
@@ -27,7 +28,7 @@ VRCMD = PROFILE["vrcmd"]
 
 
 class Quick(threading.Thread):
-    """state: {"mic_muted", "passthrough", "passthrough_ok", "keyboard", "keyboard_target", "stt_up"}
+    """state: {"mic_muted", "passthrough", "passthrough_ok", "stt_up", "countdown"}
     (bool, or None while unknown), plus "earbuds": a Bluetooth audio device's battery 0-1, or None,
     and "earbuds_charging".
     passthrough_ok is False once the passthrough route has failed: the button is greyed out."""
@@ -40,7 +41,7 @@ class Quick(threading.Thread):
         super().__init__(daemon=True, name="quick")
         self.on_change = on_change
         self.actions = queue.Queue()
-        self.state = {"mic_muted": None, "passthrough": False, "passthrough_ok": None, "keyboard": False, "keyboard_target": None,
+        self.state = {"mic_muted": None, "passthrough": False, "passthrough_ok": None,
                       "stt_up": None, "earbuds": None, "earbuds_charging": False}
         self._stt_at = self._bt_at = 0.0
         self.librepods = LibrePods()  # AirPods' battery, which BlueZ doesn't have
@@ -52,7 +53,7 @@ class Quick(threading.Thread):
             self.on_change()
 
     def act(self, name):
-        """mic | recenter (passthrough, keyboard and screenshot run in app.py)"""
+        """mic | recenter (passthrough and screenshot run in app.py)"""
         self.actions.put(name)
 
     def set_passthrough(self, shown, ok=None):
@@ -60,18 +61,10 @@ class Quick(threading.Thread):
         ok=False once the route has failed."""
         self._set(passthrough=shown, **({} if ok is None else {"passthrough_ok": ok}))
 
-    def set_keyboard(self, shown):
-        """From SteamVR's global keyboard opened/closed events."""
-        self._set(keyboard=shown)
 
     def set_countdown(self, seconds):
         """The screenshot's countdown (3, 2, 1) on its button, or None."""
         self._set(countdown=seconds)
-
-    def set_keyboard_target(self, available):
-        """Whether a window is visible for the keyboard to type into (else it's greyed out)."""
-        self._set(keyboard_target=available)
-
     def run(self):
         self.librepods.start()
         while True:

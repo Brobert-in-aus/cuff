@@ -1,0 +1,19 @@
+id = "record"
+name = "Record"
+version = "1.0.0"
+api = 1
+entry = "record:Record"
+# It runs Cuff's recorder (recorder.py), and toasts when a clip or recording is saved.
+permissions = ["commands", "toasts"]
+# Off unless the recorder is installed (docs/RECORDING.md).
+requires = "~/.local/share/cuff/bin/cuff-recorder"
+# Its settings on Cuff for PC's settings page (cuff.remote): options.py's schema() and apply().
+options = "options"
+
+[tab]
+label = "Record"
+
+# Its quick-row button (on by default): what the Record page's "Quick action" says.
+[quick.record]
+label = "Record"
+glyph = "record"

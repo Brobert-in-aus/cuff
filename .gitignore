@@ -20,7 +20,8 @@ artifacts/
 _downloads/
 build/
 dist/
-bin/
+# (bin/ only at the top: recorder/src/bin/ is source)
+/bin/
 obj/
 node_modules/
 DerivedData/
