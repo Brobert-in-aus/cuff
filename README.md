@@ -46,19 +46,63 @@ Touch the panel with the small sphere in front of your other controller.
 
 ## Install
 
-Cuff comes in two parts. Install both: the headset app, and **Cuff for PC**.
+Cuff has two parts: the wrist panel on the headset, and **Cuff for PC**, a Windows app that
+installs and updates the headset for you. The simplest way is to set up Cuff for PC and let it
+do the rest.
 
-### On the headset
+### With Cuff for PC (recommended)
 
-In Desktop Mode, open Konsole and run:
+1. **Install Cuff for PC.** Download `CuffForPC-Setup-<version>.exe` from the
+   [latest release](https://github.com/Brobert-in-aus/cuff/releases/latest) and run it. It installs
+   for your user, asks for admin once to add its firewall rules, then starts the app. The
+   first run downloads what dictation needs (about 2.5 GB), with a progress window.
+2. **Let the PC reach the headset (once).** SteamOS ships with SSH turned off. On the headset,
+   switch to Desktop Mode, open Konsole and run:
+
+   ```sh
+   passwd                              # only if you've never set a password
+   sudo systemctl enable --now sshd    # turn SSH on, and keep it on
+   ```
+
+   Then note its address: `ip -4 addr show wlan0` (the number after `inet`).
+3. **Install Cuff from the PC.** In Cuff for PC's **Headset setup**, connect with that address
+   and your password, tick the optional parts you want (the recorder, the panel helper, the
+   player), and click **Install**. It installs Cuff and pairs it with the PC.
+
+The password is used once, to give Cuff for PC its own key to the headset; it isn't saved.
+After that you don't need to wear the headset to install or update: it only has to be on and
+on your network. Cuff for PC checks for a newer release once a day: **Update** on its Overview
+page updates the app, and **Headset setup** then offers the headset's update.
+
+Cuff for PC runs at logon, in the tray. It handles dictation on your GPU and reports the
+game's side of a Steam Link stream to the Performance tab. Its window can also:
+
+- install and update Cuff on the headset over your network;
+- download your clips, recordings and screenshots, by hand or automatically;
+- change all of Cuff's settings with a mouse and keyboard;
+- type on the headset from the PC keyboard, or send it the clipboard (Ctrl+Alt+V);
+- show how good the connection is, over the dongle and your network, and while streaming.
+
+Open it later from the Start menu (**Cuff for PC**) or the tray icon. See
+[docs/PC-APP.md](docs/PC-APP.md) for what each page does. Pairing by code (the
+4-digit code on the wrist) is on the Overview page, or `pc-server\pair.ps1`.
+Dictation on the PC is fastest with an NVIDIA GPU. On other GPUs it falls back to the CPU,
+which still works but is slower. To run Cuff for PC from a copy of this repo instead, install
+[uv](https://docs.astral.sh/uv/) and run
+`powershell -ExecutionPolicy Bypass -File pc-server\install.ps1`.
+
+### On the headset alone
+
+Without a Windows PC, or if you'd rather not use one, install Cuff on the headset directly. In
+Desktop Mode, open Konsole and run:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Brobert-in-aus/cuff/main/get-cuff.sh | sh
 ```
 
-This installs Cuff for your user (`~/.local/share/cuff`) and starts it with SteamVR from
-then on. It also downloads the on-headset speech model (about 650 MB) used for dictation
-away from your PC.
+This installs the latest release for your user (`~/.local/share/cuff`) and starts it with
+SteamVR from then on. It also downloads the on-headset speech model (about 650 MB), used for
+dictation without a PC.
 
 Then it asks about the optional parts, for the Record tab:
 
@@ -77,38 +121,8 @@ To choose up front, add options: `... | sh -s -- --all`, or `--only-cuff`, `--re
 - **Remove it:** `--uninstall`. Settings and videos stay; add `--purge` for settings too.
 
 Cuff keeps a copy of its installer, so these also work without downloading it again:
-`sh ~/.local/share/cuff/app/install.sh --here --status` (or `--uninstall`).
-
-### On your PC (Windows)
-
-Cuff for PC is a desktop app that runs at logon, in the tray. It handles dictation on your
-GPU and reports the game's side of a Steam Link stream to the Performance tab. Its window
-can also:
-
-- install and update Cuff on the headset over your network;
-- download your clips, recordings and screenshots, by hand or automatically;
-- change all of Cuff's settings with a mouse and keyboard;
-- type on the headset from the PC keyboard, or send it the clipboard (Ctrl+Alt+V);
-- show how good the connection is, over the dongle and your network, and while streaming.
-
-To set it up:
-
-1. Download `CuffForPC-Setup-<version>.exe` from the
-   [latest release](https://github.com/Brobert-in-aus/cuff/releases/latest) and run it. It installs
-   for your user, asks for admin once to add its firewall rules, then starts the app. The
-   first run downloads what dictation needs (about 2.5 GB), with a progress window.
-2. In **Headset setup**, connect to the headset and click **Install**. This installs Cuff and
-   pairs it with the PC. The page explains turning on the headset's SSH the first time.
-
-Cuff for PC checks for a newer release once a day; **Update** on its Overview page installs
-it. To run it from a copy of this repo instead, install [uv](https://docs.astral.sh/uv/) and
-run `powershell -ExecutionPolicy Bypass -File pc-server\install.ps1`.
-
-Open it later from the Start menu (**Cuff for PC**) or the tray icon. See
-[docs/PC-APP.md](docs/PC-APP.md) for what each page does. Pairing by code (the
-4-digit code on the wrist) is on the Overview page, or `pc-server\pair.ps1`.
-Dictation on the PC is fastest with an NVIDIA GPU. On other GPUs it falls back to the CPU,
-which still works but is slower.
+`sh ~/.local/share/cuff/app/install.sh --here --status` (or `--uninstall`). You can add Cuff
+for PC later; its Headset setup finds the existing install.
 
 ### Without your PC
 
