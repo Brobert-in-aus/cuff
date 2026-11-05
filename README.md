@@ -1,6 +1,6 @@
 # Cuff
 
-<img src="docs/images/panel-now-playing.png" width="360" alt="Cuff showing the Spotify tab: the time and batteries, six quick actions, the tabs, and now playing">
+https://github.com/user-attachments/assets/3720c162-1180-4066-a776-92c29a05ed10
 
 A wrist panel for the Steam Frame: glance at the back of your wrist in VR and it's there. The top
 two rows are always the same, the time and battery statuses, then six quick actions; below them,
