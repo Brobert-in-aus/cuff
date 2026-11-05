@@ -96,12 +96,14 @@ Cuff for PC's **Cuff settings** page shows a charm's settings:
   and take effect when Cuff restarts.
 - **An options module** gives your own settings and storage, and lets them take effect
   without a restart. Name it in `charm.toml` (`options = "options"`, for `options.py` in the
-  charm's folder). It's loaded on its own, outside Cuff, so it must import nothing from Cuff
-  or your charm. It has:
+  charm's folder). It's loaded on its own, outside Cuff, so it must import nothing from your
+  charm, and from Cuff only `cuff.atomic`. It has:
   - `schema(config_dir)`: a list of fields. Each is a dict: `key`, `label`, optional `group`
     and `help`, a `type` (`choice` with `options` as `[value, label]` pairs, `bool`,
     `number` with `min`, `max`, `step` and `unit`, or `text`), its `value` and `default`.
   - `apply(config_dir, values)`: saves the changed values and returns a list of problems.
+    Save with `cuff.atomic.atomic_write_json(path, data)`, which writes a temporary file and
+    renames it over the old one, so a crash mid-write can't leave half a file.
 
   Cuff then calls the charm's `reload()`. See `charms/record/options.py`.
 

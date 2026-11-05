@@ -2,43 +2,16 @@
 
 Planned work, roughly in order. Nothing here is started unless it says so.
 
-## Cuff for PC as a desktop app
+## Cuff for PC as a desktop app (done)
 
-Mostly done (2026-10-26; `docs/PC-APP.md`). Cuff for PC is now a tray app with a window
-(Overview, Headset setup, Recordings, Cuff settings, Log). It installs and updates Cuff on
-the headset over SSH and pairs it. It downloads recordings, also automatically, and edits
-every Cuff setting. It types on the headset from the PC keyboard and sends the clipboard,
-and shows the link (dongle or network). The Windows installer, with updates from GitHub
-releases, is written and staged, and waits for Inno Setup to compile it. Its first release
-is still to come. Enter and the arrow keys go through Steam's key call, which isn't yet
-tried in the headset.
-
-- **Install:** a normal installer, with nothing else to install first (no uv or console).
-  It starts at logon and updates itself.
-- **A tray icon and a window** showing:
-  - whether a headset is connected, and over which link (Wi-Fi or the dongle);
-  - the paired headsets, each with an Unpair button (instead of editing `paired.json`);
-  - dictation status (model loaded, GPU or CPU), and the log.
-- **Pairing in the app:** a Pair button opens the window that takes the code from the wrist,
-  in place of `pair.ps1`.
-- **Send keyboard input to the Frame:** a "Type on the Frame" mode, where what you type on
-  the PC keyboard goes to whatever has focus in the headset. Useful for logins, search boxes
-  and chat in games, where the SteamVR keyboard is slow.
-- **Send the clipboard to the Frame:** a button (and a hotkey) that types the PC's
-  clipboard text into the focused field on the Frame.
-
-### How keyboard and clipboard could work
-
-- **Getting there:** the headset already reaches the PC with its pairing token. It would
-  hold one connection open to the PC, a WebSocket on the existing port, and the PC sends
-  text and keys down it. The headset opens no port of its own.
-- **Text:** it goes in the way dictation types today: Steam's
-  `SteamClient.Input.ControllerKeyboardSendText` (`cuff/steam.py`), into the focused window.
-- **Keys:** Enter, Backspace, Tab and the arrows need a separate path, still to find. A
-  Steam input call would be first choice; `uinput` needs root on SteamOS.
-- **You can see it:** the wrist shows "Typing from <PC>" while it's active, and Settings >
-  Alerts gets a switch to turn remote typing off.
-- **Only paired PCs** can send. Cuff never logs what's typed.
+Shipped in v1.0.0 (2026-11-03; `docs/PC-APP.md`). Cuff for PC is a tray app with a window
+(Overview, Headset setup, Recordings, Cuff settings, Connection, Type on the Frame, Log),
+installed by a normal Windows installer with nothing to install first. It starts at logon
+and updates itself from GitHub releases. It installs and updates Cuff on the headset over
+SSH and pairs it, downloads recordings and screenshots (also automatically), edits every
+Cuff setting, types on the headset from the PC keyboard and sends the clipboard, and shows
+the link (dongle or network). Enter and the arrow keys go through Steam's key call, which
+isn't yet tried in the headset.
 
 ## A customisable quick row (done, needs a headset check)
 

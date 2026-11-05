@@ -1,5 +1,6 @@
 """OpenVR: the arm64 library shim, pose maths, hand tip poses and double-buffered layers."""
 import ctypes
+import hashlib
 import json
 import math
 import os
@@ -257,12 +258,21 @@ class Layer:
     SetOverlayFromFile by path, so reloading a path kept showing the first image, and after a
     restart the reused names showed the previous run's (old layout's) images. Only the last KEEP_FILES files
     per layer are kept, so none is deleted while the compositor might still read it.
+
+    That cache is also never emptied: every file costs vrcompositor about 1.15 MB until SteamVR
+    restarts, whatever is cleared, recreated or deleted (measured 2026-11-05; reusing a name
+    shows the old image). So a layer loads as few images as it can:
+      - none while it isn't on show, or while the headset isn't in use (held, class-wide, by
+        the app from SteamVR's activity level): the latest waits, and loads when it's shown;
+      - none that's the same, pixel for pixel, as the last one it loaded.
+    The real fix is a texture instead of a file (SetOverlayTexture), not done yet.
     """
 
     SWAP_MIN, SWAP_MAX = 2, 12
     RETRY_FRAMES = 30
     KEEP_FILES = 6
     _last_error = 0.0
+    held = False  # the headset isn't in use: no layer loads anything (set by the app)
 
     def __init__(self, ov, key, name, width, sort=0, anchor_top=False):
         """anchor_top: images of different heights keep their top edge where an H_OPEN image's
@@ -289,7 +299,9 @@ class Layer:
         self.retry = 0  # frames to wait after a failed upload
         self.first_wait = None  # frames waited for the very first image to load
         self.visible = False
+        self.wanted = False  # place()'s visible: whether the layer is asked to be on show
         self.shown = [False, False]
+        self.digest = None  # the pixels last given to SteamVR, so the same image isn't loaded twice
 
     def set_sort(self, sort):
         """Move the layer in the draw order (the placement preview flips sides)."""
@@ -304,9 +316,12 @@ class Layer:
             self.ov.setOverlayWidthInMeters(h, width)
 
     def upload(self, img):
-        self.pending = img
+        d = hashlib.blake2b(img.tobytes(), digest_size=16, person=f"{img.mode}{img.size}".encode()[:16]).digest()
+        # The same as what SteamVR has (or is loading): nothing to do, and a newer image waiting
+        # to replace it is out of date too.
+        self.pending = None if d == self.digest else (img, d)
 
-    def _load(self, i, img):
+    def _load(self, i, img, digest):
         """Write img to twin i's file and load it; on failure keep it for a retry."""
         try:
             self.serial += 1
@@ -318,6 +333,7 @@ class Layer:
                 os.remove(self.files.pop(0))
             self.ov.setOverlayFromFile(self.handles[i], path)
             self.sizes[i] = img.size
+            self.digest = digest
             return True
         except (openvr.error_code.OverlayError, OSError) as e:
             now = time.monotonic()
@@ -325,7 +341,7 @@ class Layer:
                 Layer._last_error = now
                 print(f"layer: loading {self.key} failed ({e!r}), retrying", file=sys.stderr, flush=True)
             if self.pending is None:
-                self.pending = img
+                self.pending = (img, digest)
             self.loading, self.retry = None, self.RETRY_FRAMES
             return False
 
@@ -346,6 +362,7 @@ class Layer:
         anchored layer, the centre an H_OPEN image would have): in the standing space, or with
         `device`, relative to that tracked device (Hands.attach), so it rides the controller."""
         self.visible = visible and self.loaded
+        self.wanted = visible
         if visible:
             for i, h in enumerate(self.handles):
                 m = mul(frame, translation(0, self.offset(i), 0)) if self.anchor_top else frame
@@ -390,12 +407,13 @@ class Layer:
                 self.loading = (waited + 1, None)
         elif self.retry > 0:
             self.retry -= 1
-        elif self.pending is not None:
-            img, self.pending = self.pending, None
+        elif self.pending is not None and not (self.loaded and (Layer.held or not self.wanted)):
+            # (Once it has an image, a hidden layer, or any while the headset's off, waits: see above.)
+            (img, d), self.pending = self.pending, None
             if not self.loaded:  # first image: nothing to flicker against, but wait for it
-                if self._load(self.front, img):
+                if self._load(self.front, img, d):
                     self.first_wait = 0
-            elif self._load(back, img):
+            elif self._load(back, img, d):
                 self.loading = (0, img)
         want = [False, False]
         if self.visible:

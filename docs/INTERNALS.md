@@ -276,9 +276,10 @@ tab, or none, is remembered across restarts (`~/.cache/cuff/state.json`).
 | `cuff/dictation.py` | The dictation button: recording, transcription (PC servers, then the local model), typing |
 | `cuff/stt_local.py` | The on-headset model, as a helper process started on the first tap and gone after 5 idle minutes |
 | `cuff/steam.py` | Steam's client API over its CEF debugger, for typing |
+| `cuff/keyboard.py`, `cuff/keyboard.js` | The dictation key on Steam's on-screen keyboard (see "Dictation") |
 | `cuff/status.py` | Battery readings for the status bar |
 | `cuff/config.py` | `config.toml`, the headset profile (the Frame's paths and mic node by default) and Cuff's directories |
-| `pc-server/` | Cuff for PC: the desktop app (`app.py`, `app.html`, `appapi.py`; see docs/PC-APP.md), dictation (`server.py`), the stream's PC side (`stream.py`), the announcement (`beacon.py`), the headset over SSH (`frame.py`, `videos.py`), and its Windows install (`install.ps1`, `firewall.ps1`) |
+| `pc-server/` | Cuff for PC: the desktop app (`app.py`, `app.html`, `appapi.py`; see docs/PC-APP.md), dictation (`server.py`), the stream's PC side (`stream.py`), the announcement (`beacon.py`), the headset over SSH (`frame.py`, `videos.py`), its updates (`updates.py`), and its Windows install (`installer/`, or `install.ps1` from a git checkout; `firewall.ps1`) |
 | `cuff/remote.py` | Settings, videos and screenshots for Cuff for PC: `python -m cuff.remote dump / apply / videos`, run over SSH; `apply` sends Cuff SIGHUP to reload |
 | `cuff/atomic.py` | Saves the JSON settings and state files atomically (temporary file, fsync, rename), for Cuff and `cuff.remote` alike |
 | `cuff.service` | The systemd user service |
@@ -340,6 +341,24 @@ tab, or none, is remembered across restarts (`~/.cache/cuff/state.json`).
   - **What it broke.** The scrolling title hit that limit after about 2.5 minutes, and
     the panel exited.
   - **File uploads have no such limit.** 600 of 600 succeeded.
+  - **But every file costs SteamVR memory for good** (measured 2026-11-05, SteamVR 2.18).
+    - **The cost:** vrcompositor keeps each loaded path's image, about 1.15 MB for a
+      480x460 panel with mipmaps, until SteamVR restarts.
+    - **Nothing frees it:** not ClearOverlayTexture, not destroying the overlay, not
+      deleting or overwriting the file. Reusing a name shows the old image.
+    - **Raw uploads aren't cached,** but they hit the cap above.
+    - **What it cost before v1.2.1:** redrawing the Performance tab every second, panel in
+      view or not, was about 4 GB an hour, and 12.9 GB built up over 66 hours on
+      2026-11-03.
+    - **Since v1.2.1, `Layer` loads as little as it can:**
+      - nothing while the layer isn't on show;
+      - nothing while SteamVR's activity level says the headset isn't in use (Standby,
+        or a timeout). Its pose freezes on a desk, so the panel can seem to be in view.
+      - nothing identical, pixel for pixel, to what it last loaded.
+      The latest image waits and loads when the layer is shown. With the panel on
+      Performance and the headset idle, vrcompositor grew by 0 kB in 2 minutes, against
+      11.5 MB every 10 s before.
+    - **The real fix,** a texture instead of a file (`SetOverlayTexture`), is still to do.
 - **Double-buffered layers (`Layer`).** The panel, the title and the sphere each use
   two overlays, each with its own PNG file.
   - **Why.** Replacing an overlay's image made it blink on every redraw. That showed
@@ -503,17 +522,19 @@ enter and tab go through as `ControllerKeyboardSetKeyState` presses.
   the panel's top edge, for 4 s. One per source per 3 s, at most three waiting; the rest are
   dropped and logged.
 - **Alerts** are toasts raised with `haptic=True`. Each also gets three 20 ms buzzes on the
-  left controller (the wrist the panel is on), a chime (`cuff/chime.py`: two soft notes made
+  controller of the wrist the panel is on, a chime (`cuff/chime.py`: two soft notes made
   into a WAV once and played with `pw-play` under a `*_filter_chain` node name, so SteamOS's
   spatial audio leaves it on the default output), and, while the panel is turned away, a
   glow on the hand.
-- **Glows.** One per waiting alert, up to four in a row 36 mm apart, on the far side of the
-  left controller from the head: 7 cm past the controller's middle along the line from the
-  eyes, running sideways across the view, so they show just behind the controller as you look
-  at it. Each is a billboarded soft glow whose bright core is twice the touch sphere's size,
-  white by default, orange or red for a battery's first and second levels, with the alert's
-  icon in the middle (`vr.glow_texture`). They go out when the panel is looked at, or after
-  8 s. A burst of alerts plays one chime.
+- **Glows.** One per waiting alert, up to four in a row 36 mm apart, on the far side of that
+  controller from the head: 7 cm past the controller's middle along the line from the eyes
+  (`ORB_BEHIND`), and 7 cm up from that line as seen from the head (`ORB_ABOVE`), running
+  sideways across the view. So they show just beyond and above the controller as you look at
+  it; straight behind it, the controller hid them. Each is a billboarded soft glow whose
+  bright core is twice the touch sphere's size, white by default, orange or red for a
+  battery's first and second levels, with the alert's icon in the middle
+  (`vr.glow_texture`). They go out when the panel is looked at, or after 8 s. A burst of
+  alerts plays one chime.
 - **Test alert** (Settings > Alerts) waits 3 s, so the panel can be turned away, then lights
   three: white, orange with a PNG (`cuff/assets/bell.png`) and red with an image drawn in code.
 - **The headset's power.** `PowerWatch` alerts when the headset goes from charging to
@@ -552,11 +573,16 @@ enter and tab go through as `ControllerKeyboardSetKeyState` presses.
   or off and the tab order (`charms.json`'s `order`, which wins over `config.toml`'s `tabs`)
   wait for a restart. Its output carries `"api": 1`, a protocol version for Cuff for PC to
   compare. `videos` lists the clips and recordings (`"folder"`, `"videos"`, `"recording"`),
-  and, after v1.0.0, the screenshots too: `"screenshot_folder"` (the profile's
+  and, since v1.1.0, the screenshots too: `"screenshot_folder"` (the profile's
   `screenshot_dir`, expanded) and `"screenshots"`, one entry per pair with its `"name"`
   (`<time>`), `"vr"` and `"preview"` file names (null when that file's missing), `"sizes"`,
   `"size"` and `"mtime"`. New keys keep `"api": 1`; Cuff for PC lists the default folder over
   SFTP when they're absent.
+- **New recordings** (since v1.2.0). When a screenshot is taken (2 s later, once its files are
+  written) or the Record charm saves a clip or recording (`ctx.recordings_changed()`),
+  `cuff/pc.py` sends Cuff for PC a signed `POST /recordings/changed` in the background, so its
+  Recordings page lists it without a Refresh. Nothing about the file is sent, and an
+  unreachable or older PC is ignored.
 - **Saving settings.** Cuff and `cuff.remote` both write the JSON files under
   `~/.config/cuff` (and Cuff's cache) through `cuff/atomic.py`: a temporary file in the same
   folder, flushed to disk, then renamed over the old one, so a crash mid-write can't leave
@@ -577,10 +603,11 @@ enter and tab go through as `ControllerKeyboardSetKeyState` presses.
   - **Requests:** each address may ask once a second and hold 2 requests; with 8 waiting, a
     new one pushes out the oldest rather than being refused.
   - **Tokens** are kept in `~/.config/cuff/pc-pairing.json`, mode 600, under the PC's name,
-    with `"@ids": {<PC id>: <PC name>}` saying which PC each belongs to. One under the name
-    only (an older Cuff's, or written by the PC app over SSH) is tried with the PC of that name
-    and bound to its id the first time that PC proves it holds it; once bound, the name is no
-    use to another id.
+    with `"@ids": {<PC id>: <PC name>}` saying which PC each belongs to. Pairing over SSH
+    writes the binding with the token (`frame.py`), so a reinstalled Cuff for PC, which has a
+    new id, takes the name over. One under the name only (an older Cuff's) is tried with the
+    PC of that name and bound to its id the first time that PC proves it holds it; once bound,
+    the name is no use to another id.
   - **Signed, not sent.** The token never crosses the network after pairing. Every request but
     `/health` and pairing is signed with it: `Authorization: Cuff v=1, id=<headset id>,
     ts=<unix time>, nonce=<random>, mac=<hex HMAC-SHA256(token, method

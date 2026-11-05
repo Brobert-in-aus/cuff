@@ -31,6 +31,9 @@ from .services import Services
 STATE_FILE = os.path.join(config.CACHE_DIR, "state.json")
 SCREENSHOT_DIR = os.path.expanduser(config.PROFILE["screenshot_dir"])
 SCREENSHOT_DELAY_S = 3.0
+# While SteamVR says the headset isn't in use, no layer loads a new image (vr.Layer: each one
+# SteamVR loads stays in its memory until it restarts). Checked this often.
+ACTIVITY_S = 0.5
 SCREENSHOT_NUDGE_S = 2.0  # after taking one, until Cuff for PC is told (its files are written by then)
 # The camera is back on the button this long before the shot, so the panel (redrawn on its own
 # thread, then uploaded) shows it in the picture rather than the countdown's last "1".
@@ -430,6 +433,18 @@ def main(debug=False):
         if mailbox.ok and not roomview_on() and send_roomview(True):
             bubble_off_at[0] = time.monotonic() + RECENTER_BLINK_S
 
+    activity_at = [0.0]
+    idle_levels = {getattr(openvr, n) for n in ("k_EDeviceActivityLevel_Standby", "k_EDeviceActivityLevel_Idle_Timeout",
+                                                "k_EDeviceActivityLevel_UserInteraction_Timeout") if hasattr(openvr, n)}
+
+    def headset_idle():
+        """Whether SteamVR says the headset isn't in use (on a desk: standby, or timed out). Its
+        pose then stays put, so the panel can seem to be in view while nobody's looking."""
+        try:
+            return system.getTrackedDeviceActivityLevel(openvr.k_unTrackedDeviceIndex_Hmd) in idle_levels
+        except openvr.error_code.OpenVRError:
+            return False
+
     shots = openvr.VRScreenshots()
     shot_at = [None]  # when the pending screenshot is due
 
@@ -504,6 +519,9 @@ def main(debug=False):
                 # Status bar: re-read every 10 s (2 s while a battery hasn't reported yet, as the
                 # controllers often haven't at startup) and at the minute; redraw only on a change.
                 now = time.monotonic()
+                if now - activity_at[0] >= ACTIVITY_S:
+                    activity_at[0] = now
+                    Layer.held = headset_idle()
                 if bubble_off_at[0] is not None and now >= bubble_off_at[0]:
                     bubble_off_at[0] = None
                     if send_roomview(False):

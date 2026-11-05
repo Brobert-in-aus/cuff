@@ -31,7 +31,8 @@ MIT licensed (`LICENSE`).
     alerts get your attention.
 - **Alerts:** a timer going off, a break reminder, the headset no longer charging (because your external battery pack went flat), or a
   low battery. Each one shows a message above the panel, buzzes your wrist and plays a chime.
-  If the panel isn't in view, a glow appears just behind the controller on that wrist until you look.
+  If the panel isn't in view, a glow appears just beyond and above the controller on that wrist
+  until you look.
 
 Touch the panel with the small sphere in front of your other controller.
 
@@ -42,8 +43,6 @@ Touch the panel with the small sphere in front of your other controller.
 | Settings: Place | Settings: Alerts | Settings: Charms |
 | --- | --- | --- |
 | <img src="docs/images/panel-settings-place.png" width="240" alt="Settings, Place: size, position and wrist"> | <img src="docs/images/panel-settings-alerts.png" width="240" alt="Settings, Alerts: buzz, chime, glow and battery alerts"> | <img src="docs/images/panel-settings-charms.png" width="240" alt="Settings, Charms: turn charms on or off"> |
-
-These are renders with sample content (`python -m cuff render`), not screenshots.
 
 ## Install
 
@@ -72,9 +71,13 @@ Then it asks about the optional parts, for the Record tab:
 To choose up front, add options: `... | sh -s -- --all`, or `--only-cuff`, `--recorder`,
 `--helper` or `--player`.
 
-- **Update:** run it again.
+- **Update:** run it again. It installs the latest release, and rebuilds the recorder if
+  that changed.
 - **See what's installed:** `--status`.
 - **Remove it:** `--uninstall`. Settings and videos stay; add `--purge` for settings too.
+
+Cuff keeps a copy of its installer, so these also work without downloading it again:
+`sh ~/.local/share/cuff/app/install.sh --here --status` (or `--uninstall`).
 
 ### On your PC (Windows)
 
@@ -90,13 +93,16 @@ can also:
 
 To set it up:
 
-1. Install [uv](https://docs.astral.sh/uv/): `winget install --id=astral-sh.uv -e`.
-2. Get this repo (download it as a zip, or `git clone`), then run:
-   `powershell -ExecutionPolicy Bypass -File pc-server\install.ps1`.
-   It asks for admin once to add its firewall rules, then starts the app and opens its
-   window.
-3. In **Headset setup**, connect to the headset and click **Install**. This installs Cuff and
+1. Download `CuffForPC-Setup-<version>.exe` from the
+   [latest release](https://github.com/Brobert-in-aus/cuff/releases/latest) and run it. It installs
+   for your user, asks for admin once to add its firewall rules, then starts the app. The
+   first run downloads what dictation needs (about 2.5 GB), with a progress window.
+2. In **Headset setup**, connect to the headset and click **Install**. This installs Cuff and
    pairs it with the PC. The page explains turning on the headset's SSH the first time.
+
+Cuff for PC checks for a newer release once a day; **Update** on its Overview page installs
+it. To run it from a copy of this repo instead, install [uv](https://docs.astral.sh/uv/) and
+run `powershell -ExecutionPolicy Bypass -File pc-server\install.ps1`.
 
 Open it later from the Start menu (**Cuff for PC**) or the tray icon. See
 [docs/PC-APP.md](docs/PC-APP.md) for what each page does. Pairing by code (the
@@ -121,8 +127,9 @@ The gear tab:
   audio routing, running programs).
 - **Alerts:** switch the buzz, chime, glow and charging alert on or off, and set each
   device's low battery levels.
+- **Quick:** which six buttons the quick row shows, and in what order.
 
-The same settings, plus the quick row, Record's settings and the tab order, are on Cuff
+The same settings, plus Record's settings and the tab order, are on Cuff
 for PC's **Cuff settings** page. Everything else lives in `~/.config/cuff/config.toml`, which
 is optional. See `cuff/config.py` for the options.
 

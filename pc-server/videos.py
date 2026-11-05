@@ -6,7 +6,7 @@ download new ones by themselves.
   come from the headset's ffprobe and ffmpeg, once each, cached on the PC
   (%LOCALAPPDATA%\\cuff-pc\\thumbs).
 - Screenshots: Cuff's screenshot button saves a pair, <time>-vr.png (both eyes) and
-  <time>-preview.png (one). cuff.remote videos lists them too, after v1.0.0; a headset with
+  <time>-preview.png (one). cuff.remote videos lists them too, since v1.1.0; a headset with
   v1.0.0 (no "screenshots" in its answer) has them listed over SFTP from the default folder,
   ~/Pictures/Frame screenshots. A thumbnail is the preview, made smaller here (Pillow) and
   cached with the videos' ones.
@@ -18,6 +18,9 @@ download new ones by themselves.
   both) and screenshots that haven't changed for SETTLED_S (so not one still being recorded)
   are downloaded. "Then delete them from the headset" removes each file only after its
   download is checked.
+- Nudges: a headset on v1.2.0 or later sends POST /recordings/changed when it saves a
+  screenshot, clip or recording (server.py). The list is read again at once (and fetched, if
+  downloads are automatic), and again once SETTLED_S has passed.
 - Deleting: only files directly in ~/Videos/framecorder or its clips/ folder, and screenshot
   pairs directly in the screenshot folder.
 

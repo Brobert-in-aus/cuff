@@ -2,6 +2,7 @@
 # Install, update or remove Cuff on the Steam Frame.
 #   Nothing downloaded yet (Desktop Mode's Konsole):  curl -fsSL <get-cuff.sh's URL> | sh
 #   On the headset, from an unpacked copy:            sh install.sh --here [options]
+#   The copy Cuff keeps (for --status, --uninstall):  sh ~/.local/share/cuff/app/install.sh --here ...
 #   From a PC over SSH (development):                 sh install.sh [ssh host] [options]
 #     (copies this folder to ~/src/cuff on the headset and runs it there; default host: frame)
 #
@@ -14,6 +15,7 @@
 #   --status      say what's installed, change nothing
 #   --uninstall   remove Cuff and its optional parts; settings and videos stay
 #   --purge       with --uninstall, settings go too (~/.config/cuff)
+# Any install also rebuilds an installed recorder whose source changed (when Rust is there).
 #
 # Logs:      journalctl --user -u cuff -f
 # Debug run: systemctl --user stop cuff; PYTHONPATH=~/.local/share/cuff/app ~/.local/share/cuff/venv/bin/python -m cuff --debug
@@ -123,7 +125,7 @@ install_cuff() {
     if [ -f "$DIR/VERSION" ]; then cp "$DIR/VERSION" "$APP/app/VERSION"; else rm -f "$APP/app/VERSION"; fi
     # This script, kept with Cuff, for --status and --uninstall later (Cuff for PC runs it
     # there, as a get-cuff.sh install leaves no unpacked copy behind).
-    cp "$DIR/install.sh" "$APP/app/install.sh"
+    [ "$DIR/install.sh" -ef "$APP/app/install.sh" ] || cp "$DIR/install.sh" "$APP/app/install.sh"  # (run from that copy: nothing to do)
     cp "$DIR/cuff.service" "$UNITS/"
     # The venv sees system site-packages for dbus-python (not on PyPI as a wheel). Then the
     # dictation model (~650 MB, once), so the first tap needn't download it, and the service.
@@ -250,6 +252,6 @@ offer_framecorder_off
 status
 if [ -z "${CUFF_FROM_PC_APP:-}" ]; then  # Cuff for PC, which ran this, pairs and says what's next itself
     echo
-    echo "Next, on your PC: Cuff for PC (pc-server/install.ps1), then pair."
+    echo "Next, on your PC: Cuff for PC (CuffForPC-Setup from the GitHub releases), then pair."
     echo "Optional extras: AirPods battery (docs/AIRPODS.md), Spotify on the headset (docs/SPOTIFY.md)."
 fi

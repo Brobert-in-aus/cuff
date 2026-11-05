@@ -30,7 +30,9 @@ run it with `--all` (see the README). From an unpacked copy on the headset:
 
 - **The recorder** is built on the headset (a few minutes). The installer installs Rust
   first if needed (no password; about 300 MB), and puts `cuff-recorder` and `cuff-grab` in
-  `~/.local/share/cuff/bin/`.
+  `~/.local/share/cuff/bin/`. Each update rebuilds it if its source changed. If the panel
+  helper changed too, the installer says so: run it again with `--helper` (it asks for your
+  password).
 - **The panel helper** is `cuff-grab`, installed to `~/.local/lib/cuff/` owned by root
   with `cap_sys_admin`. Reading another program's framebuffers needs that permission, so
   the installer asks for your password once. If SteamOS has no password for you yet, it
@@ -49,7 +51,7 @@ The Record tab appears once `cuff-recorder` is installed. Its log is
 
 - **Cuff's panel is in the video** when you look at it while recording, as everything on
   the panels is.
-- **Without the panel helper** (step 1's password), the recorder records SteamVR's view
+- **Without the panel helper,** the recorder records SteamVR's view
   instead: 16:9, left eye only, and it costs the game a little GPU time.
 - **No clip binding:** holding the left stick to clip was Framecorder's tab's. Clip from the
   Record tab instead.

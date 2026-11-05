@@ -11,8 +11,9 @@ optional parts, see what's installed, and pair the headset with this PC.
   refused before any password or key is offered, and the page shows its fingerprint; the
   person can then choose to trust it (a reinstalled headset, or a second one). Only the very
   first headset is trusted on first use.
-- Installing: this app's copy of Cuff (the folder above pc-server) is uploaded to ~/src/cuff
-  on the headset, replacing what was there, and install.sh --here runs there with the parts
+- Installing: what install.sh uses from this app's copy of Cuff (UPLOAD, from the folder above
+  pc-server) is uploaded to ~/src/cuff on the headset, replacing what was there, and
+  install.sh --here runs there with the parts
   chosen. It runs on a terminal (a pty), so it can ask: its yes/no questions and password
   prompts come back to the app page as a prompt, and the answer goes back as input.
   Answers to password prompts are never logged or kept.
@@ -20,8 +21,9 @@ optional parts, see what's installed, and pair the headset with this PC.
   ~/src/cuff's on a headset installed before that copy was kept.
 - Pairing over SSH: the connection already proves it's the person's headset, so instead of
   a code the app makes a token (pairing.Pairing.add) and writes it to the headset's
-  ~/.config/cuff/pc-pairing.json under this PC's name, then restarts Cuff there. A headset
-  that already holds a working token for this PC is left alone.
+  ~/.config/cuff/pc-pairing.json under this PC's name, with "@ids" binding that name to this
+  PC's id, then restarts Cuff there. A headset that already holds a working token for this PC,
+  bound to this PC's id, is left alone.
 - Cuff's settings: python -m cuff.remote on the headset (cuff/remote.py) lists them with their
   choices and saves changes; Cuff takes up most at once and the rest at a restart.
 - The SSH connection belongs to Frame: other modules (videos.py, linkquality.py) use run(),

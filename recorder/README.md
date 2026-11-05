@@ -24,9 +24,11 @@ Cuff's changes:
 On the headset, with Rust (`rustup`) and SteamOS's own headers, which it already has:
 
 ```sh
-sh recorder/install.sh
+sh recorder/install.sh --here
 ```
 
-That builds `cuff-recorder` and installs it to `~/.local/share/cuff/bin/`. It reads the
-panels through the helper at `~/.local/lib/framecorder/framecorder-grab`, which
-Framecorder's installer puts in place with its permission.
+That builds `cuff-recorder` and `cuff-grab` and installs them to `~/.local/share/cuff/bin/`.
+Cuff's installer does this for you (`install.sh --recorder`). The recorder reads the panels
+through the helper at `~/.local/lib/cuff/cuff-grab`, which `install.sh --helper` puts in
+place, owned by root with `cap_sys_admin`. Framecorder's own
+`~/.local/lib/framecorder/framecorder-grab` works too.

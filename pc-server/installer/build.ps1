@@ -1,6 +1,6 @@
 # Build Cuff for PC's Windows installer: installer\output\CuffForPC-Setup-<version>.exe, and
 # its SHA-256 next to it (CuffForPC-Setup-<version>.exe.sha256, as sha256sum writes it).
-#   powershell -ExecutionPolicy Bypass -File pc-server\installer\build.ps1 [-Owner <github owner>] [-NoCompile]
+#   powershell -ExecutionPolicy Bypass -File pc-server\installer\build.ps1 [-Owner <github owner>] [-Version vX.Y.Z-rcN] [-AllowDev] [-NoCompile]
 #
 # 1. Stages the public copy of this repo's current commit (tools/publish.sh --stage: no
 #    private files, checked), with a VERSION file (git describe).

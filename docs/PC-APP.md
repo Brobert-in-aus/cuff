@@ -5,8 +5,8 @@ stream stats, pairing), a tray icon, and a window. From the window it also sets 
 headset: installing and updating Cuff, its recordings and screenshots, every Cuff setting, and typing on it
 from the PC keyboard.
 
-Built 2026-10-26. The Windows installer is written and staged, but not yet compiled (it needs
-Inno Setup; see "The installer").
+Built 2026-10-26. The Windows installer ("The installer", below) shipped with v1.0.0
+(2026-11-03).
 
 ## Running it
 
@@ -138,8 +138,11 @@ Inno Setup; see "The installer").
     gone. Connecting and Disconnect are serialised: a reconnect under way when you click
     Disconnect is dropped, not left connected.
 - **Installing:**
-  - **Upload:** the app uploads its own copy of Cuff (the folder above `pc-server`, without
-    `.git`, build output or media, plus a `VERSION` file) to `~/src/cuff`, replacing it.
+  - **Upload:** the app uploads only what the headset's `install.sh` uses from its own copy
+    of Cuff (`cuff`, `charms`, `recorder`, `install.sh`, `cuff.service`, `requirements.txt`
+    and `LICENSE`, without caches or build output, plus a `VERSION` file) to `~/src/cuff`,
+    replacing it. An installed Cuff for PC's folder also holds its multi-GB downloads, which
+    stay on the PC.
   - **Run:** `install.sh --here` runs there on a terminal (a pty). An unfinished last line
     that stops for 0.4 s is a question: `[Y/n]` gives buttons, "password:" a hidden field,
     any other ending in `:` or `?` a text field. The terminal echoes answers, except
@@ -147,10 +150,11 @@ Inno Setup; see "The installer").
 - **Pairing over SSH:** the SSH login already proves it's your headset, so no code is
   needed.
   - **Token:** the app makes a token (`Pairing.add`) and writes it to the headset's
-    `~/.config/cuff/pc-pairing.json` under the PC's name, then restarts Cuff. The headset
-    binds it to this PC's id the first time this PC proves it holds it (docs/INTERNALS.md).
-  - **Already paired:** a headset that already holds a working token for this PC is left
-    alone.
+    `~/.config/cuff/pc-pairing.json` under the PC's name, with `"@ids"` binding that name to
+    this PC's id (docs/INTERNALS.md), then restarts Cuff. A reinstalled Cuff for PC has a new
+    id, so the binding is rewritten, and no other id keeps that name.
+  - **Already paired:** a headset that already holds a working token for this PC, bound to
+    this PC's id, is left alone.
 - **Settings:** `cuff.remote dump` lists every setting with its type, choices, current value
   and default, in sections. `apply` takes `{section: {key: value}}`, writes the files Cuff
   uses (`placement.json`, `quick.json`, `alerts.json`, `charms.json`, a charm's own), then
@@ -167,8 +171,8 @@ Inno Setup; see "The installer").
     and a 320 px JPEG, once, kept in `%LOCALAPPDATA%\cuff-pc\thumbs`.
   - **Downloads:** they go over SFTP to `name.part`, then are renamed, keeping the video's
     date. A file there at the same size counts as downloaded.
-  - **Screenshots:** `cuff.remote videos` also lists the screenshot folder (the profile's
-    `screenshot_dir`) as pairs: `<time>-vr.png` (both eyes, side by side) and
+  - **Screenshots:** since v1.1.0, `cuff.remote videos` also lists the screenshot folder (the
+    profile's `screenshot_dir`) as pairs: `<time>-vr.png` (both eyes, side by side) and
     `<time>-preview.png` (one). A headset on v1.0.0, whose `cuff.remote` doesn't list them,
     has `~/Pictures/Frame screenshots` listed over SFTP instead. A download is both files, in
     the download folder's `screenshots\`. Thumbnails are the preview, shrunk to 480 px here
@@ -210,7 +214,8 @@ Inno Setup; see "The installer").
   - **Thumbnails** (`<img>`, which can't send a header) carry this run's random key instead,
     from `/app/state`, which only the page can read.
   - **The other local routes** (`/pair/open`, `/pair/confirm`, and `/stream`, `/transcribe`,
-    `/typing/next` from the PC itself) have the same guard; `pair.ps1` sends the header.
+    `/typing/next`, `/recordings/changed` from the PC itself) have the same guard; `pair.ps1`
+    sends the header.
   - **JSON** bodies must be sent as `application/json`, which a plain web form can't.
 - **Secrets:** tokens never reach the page (a headset is named by a hash of its token), and
   passwords are used once and never stored or logged.
@@ -280,26 +285,23 @@ Inno Setup; see "The installer").
     Cuff for PC may have started it inside its task), it doesn't stop the task, which
     would end Setup too.
   - **First-run log:** first-run setup writes to `%LOCALAPPDATA%\cuff-pc\setup.log`.
-- **Tested** (2026-10-26, builds v0.0.1 and v0.0.2 on the development PC):
-  - **Install:** a silent install over a running git checkout's copy. It skipped the
-    firewall step because the rules exist, and set up the files, `VERSION`, `uv.exe`, the
-    logon task, the shortcut and the Apps entry. First-run setup from a deleted `.venv`
-    worked, and so did dictation on the GPU and the reconnect to the headset.
-  - **Update:** v0.0.2 over a running v0.0.1. The old copy quit, the packages were kept,
-    and v0.0.2 came back up.
-  - **The app's own update path:** download, size check, and a silent run. It was fed the
-    v0.0.2 installer as if from GitHub, and a wrong size stops it.
-  - **Silent uninstall:** it removed the folder, task, shortcut and Apps entry, and kept
-    `%LOCALAPPDATA%\cuff-pc` and the firewall rules.
+- **Tested:**
+  - **First builds** (2026-10-26, v0.0.1 and v0.0.2 on the development PC): a silent install
+    over a running git checkout's copy, an update over a running copy (the packages were
+    kept), and a silent uninstall (it kept `%LOCALAPPDATA%\cuff-pc` and the firewall rules).
+  - **The update logic** against a local fake release: checksum right, wrong or missing, a
+    misnamed asset, a stalled download, a double click. StopApp's command against a folder
+    named with an apostrophe and brackets.
+  - **From a clean slate** (2026-11-03, v1.0.0-rc6 to rc8): a silent install and its first
+    run into `cache\`; two self-updates against a local test release, each checking the
+    `.sha256`, starting Setup outside the logon task's job and back up in about 18 s, with no
+    update task left over; a silent uninstall that removed the folder with `cache\`, both
+    tasks and the shortcut.
+  - **Real releases:** since v1.0.0, updates from the public repo's GitHub releases through
+    Overview's **Update**.
   - **Not tested yet:** an interactive install, which asks for admin when the firewall
     rules are missing. Also an interactive uninstall, which asks about your data and for
-    admin to remove the firewall rules. Also a real GitHub release.
-  - **Since changed, not yet tested installed:** the checksum, the start outside the logon
-    task's job (and the one-shot task fallback), `-Start`, the app-folder `cache\` and its
-    removal, and StopApp's new quoting. The update logic was tested against a local fake
-    release (checksum right, wrong or missing, a misnamed asset, a stalled download, a
-    double click), and StopApp's command against a folder named with an apostrophe and
-    brackets.
+    admin to remove the firewall rules.
 
 ## Still to build
 

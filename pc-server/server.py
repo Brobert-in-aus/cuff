@@ -13,6 +13,8 @@ API:
                         the headset's Performance tab (stream.py)
   GET  /typing/next?after=<seq>&run=<id>  -> {"seq", "run", "items", "on"}: text and keys typed on the PC,
                         long-polled by the headset (typing_link.py)
+  POST /recordings/changed  body: {"what"}: the headset just saved a screenshot, clip or
+                        recording, so Recordings lists it now (videos.py)
 
   uv run server.py --stats-only   just /stream and /health, without loading the speech model
 
