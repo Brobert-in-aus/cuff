@@ -103,6 +103,9 @@
   .seg { display: inline-flex; background: var(--input); border: 1px solid var(--line); border-radius: 9px; padding: 2px; flex-wrap: wrap; }
   .seg button { background: transparent; padding: 5px 13px; color: var(--dim); }
   .seg button.on { background: var(--card); color: var(--fg); box-shadow: 0 1px 3px rgba(0,0,0,.18); font-weight: 600; }
+  .big a { color: inherit; text-decoration: underline dotted 1px; text-underline-offset: 4px; }
+  .big a:hover { color: var(--accent, inherit); }
+  .seg button .n { color: var(--dim); font-weight: 400; margin-left: 2px; }
   .slider { display: flex; gap: 12px; align-items: center; }
   .slider input { flex: 1; accent-color: var(--accent); }
   .slider .val { width: 70px; text-align: right; font-variant-numeric: tabular-nums; }
@@ -296,17 +299,26 @@
     <div class="msg bad" id="v-errors"></div>
   </section>
   <div class="toolbar">
+    <div class="seg" id="r-view">
+      <button data-view="videos" class="on">Videos <span class="n" id="r-nv"></span></button>
+      <button data-view="shots">Screenshots <span class="n" id="r-ns"></span></button>
+    </div>
     <button id="v-refresh">Refresh</button>
-    <button id="v-all">Download all new</button>
-    <span class="sub grow" id="v-summary"></span>
   </div>
-  <div class="videos" id="videos"></div>
-  <h2 style="margin-top:26px">Screenshots</h2>
-  <div class="toolbar">
-    <button id="s-all">Download all new</button>
-    <span class="sub grow" id="s-summary"></span>
+  <div id="r-videos">
+    <div class="toolbar">
+      <button id="v-all">Download all new</button>
+      <span class="sub grow" id="v-summary"></span>
+    </div>
+    <div class="videos" id="videos"></div>
   </div>
-  <div class="videos" id="shots"></div>
+  <div id="r-shots" class="hidden">
+    <div class="toolbar">
+      <button id="s-all">Download all new</button>
+      <span class="sub grow" id="s-summary"></span>
+    </div>
+    <div class="videos" id="shots"></div>
+  </div>
   <div class="lightbox hidden" id="lightbox">
     <div class="lbox">
       <img id="lb-img" alt="">
@@ -431,7 +443,20 @@ function twice(key, button, text) {
 
 // ------------------------------------------------------------ pages
 let page = "overview";
+// Recordings shows videos or screenshots, one at a time; the last choice is remembered.
+// #screenshots opens Recordings on the screenshots.
+let recView = "videos";
+try { recView = localStorage.getItem("cuff.recView") === "shots" ? "shots" : "videos"; } catch (e) {}
+function setRecView(view) {
+  recView = view === "shots" ? "shots" : "videos";
+  try { localStorage.setItem("cuff.recView", recView); } catch (e) {}
+  $("r-videos").classList.toggle("hidden", recView !== "videos");
+  $("r-shots").classList.toggle("hidden", recView !== "shots");
+  document.querySelectorAll("#r-view button").forEach((b) => b.classList.toggle("on", b.dataset.view === recView));
+}
+document.querySelectorAll("#r-view button").forEach((b) => (b.onclick = () => setRecView(b.dataset.view)));
 function show(name) {
+  if (name === "screenshots" || name === "videos") { setRecView(name === "screenshots" ? "shots" : "videos"); name = "recordings"; }
   page = document.getElementById("page-" + name) ? name : "overview";
   document.querySelectorAll(".page").forEach((p) => p.classList.toggle("on", p.id === "page-" + page));
   document.querySelectorAll("nav a").forEach((a) => a.classList.toggle("on", a.dataset.page === page));
@@ -614,7 +639,18 @@ function showVideos() {
   $("v-auto-opts").style.opacity = s.auto ? 1 : .5;
   $("v-errors").textContent = v.errors.slice(-1)[0] || "";
   const newOnes = v.videos.filter((x) => !x.downloaded);
-  $("ov-videos").textContent = v.listed_at ? `${v.videos.length} videos, ${v.screenshots.length} screenshots` : "Not listed yet";
+  // Rewritten only when the counts change, so a click on a link isn't lost to the next tick.
+  const counts = v.listed_at ? `${v.videos.length}/${v.screenshots.length}` : "";
+  if ($("ov-videos").dataset.counts !== counts) {
+    $("ov-videos").dataset.counts = counts;
+    if (v.listed_at) {
+      $("ov-videos").innerHTML = `<a href="#videos">${v.videos.length} videos</a>, <a href="#screenshots">${v.screenshots.length} screenshots</a>`;
+    } else {
+      $("ov-videos").textContent = "Not listed yet";
+    }
+  }
+  $("r-nv").textContent = v.listed_at ? v.videos.length : "";
+  $("r-ns").textContent = v.listed_at ? v.screenshots.length : "";
   $("ov-videos-sub").textContent = (s.auto ? "Downloading new ones automatically" : "Automatic downloads are off") +
     (v.current ? ` · downloading ${v.current.path}` : "");
   $("v-summary").textContent = v.listed_at ? `${v.videos.length} videos · ${newOnes.length} not downloaded · ${bytes(v.videos.reduce((a, x) => a + x.size, 0))} on the headset` : "Connect to the headset to see its videos.";
@@ -1002,6 +1038,7 @@ $("t-send").onclick = async () => {
 };
 $("t-clip").onclick = async () => { const r = await api("/app/typing/clipboard", {}); msg("t-msg", r.message, r.ok); };
 
+setRecView(recView);
 show(location.hash.slice(1) || "overview");
 setInterval(tick, 2000);
 </script>

@@ -96,7 +96,17 @@ class Videos:
         self.errors = []
         self.auto_paths = set()  # queued by the automatic download (only those are deleted after)
         self.wake = threading.Event()
+        self.nudged = False  # the headset said something new was saved (nudge)
+        self.recheck_at = None  # and a second look once it's settled (SETTLED_S)
         threading.Thread(target=self._worker, daemon=True, name="videos").start()
+
+    def nudge(self):
+        """The headset just saved a screenshot, clip or recording (POST /recordings/changed): list
+        them again now, so the page shows it without a Refresh, and fetch it if downloads are
+        automatic. Automatic downloads skip anything newer than SETTLED_S, so it looks again then."""
+        self.nudged = True
+        self.recheck_at = time.time() + SETTLED_S + 2
+        self.wake.set()
 
     def save_settings(self, changes):
         with self.lock:
@@ -286,10 +296,15 @@ class Videos:
         while True:
             self.wake.wait(timeout=5)
             self.wake.clear()
+            nudged, self.nudged = self.nudged, False
+            if self.recheck_at and time.time() >= self.recheck_at:
+                nudged, self.recheck_at = True, None
             try:
-                if self.settings["auto"] and self.frame.connected() and time.time() - last_auto > AUTO_EVERY_S:
+                if self.settings["auto"] and self.frame.connected() and (nudged or time.time() - last_auto > AUTO_EVERY_S):
                     last_auto = time.time()
-                    self._auto()
+                    self._auto()  # lists them too
+                elif nudged and self.frame.connected():
+                    self.refresh()
                 while self.frame.connected():
                     with self.lock:
                         if not self.queue:

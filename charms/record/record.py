@@ -209,6 +209,7 @@ class Record(Charm):
                     self.ctx.notify(f"Clipped the last {secs:.0f} s", haptic=True)
                     self._record_after_clip()
                 self.error = None
+                self.ctx.recordings_changed()  # Cuff for PC lists it without a Refresh
             elif word == "busy":
                 self.note = "Recording, so the clip's in it already"
                 self.ctx.notify("Recording: it's all in there")

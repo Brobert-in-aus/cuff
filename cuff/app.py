@@ -31,6 +31,10 @@ from .services import Services
 STATE_FILE = os.path.join(config.CACHE_DIR, "state.json")
 SCREENSHOT_DIR = os.path.expanduser(config.PROFILE["screenshot_dir"])
 SCREENSHOT_DELAY_S = 3.0
+SCREENSHOT_NUDGE_S = 2.0  # after taking one, until Cuff for PC is told (its files are written by then)
+# The camera is back on the button this long before the shot, so the panel (redrawn on its own
+# thread, then uploaded) shows it in the picture rather than the countdown's last "1".
+SCREENSHOT_SETTLE_S = 0.4
 RECENTER_BLINK_S = 0.3  # Room View's blink after a recenter, which re-makes the chaperone bubble
 # After the blink, the compositor log's "enabled" line for it can still be on its way: one that
 # turns up this soon after doesn't count as Room View coming on (vr.RoomView.note).
@@ -439,6 +443,8 @@ def main(debug=False):
         try:
             shots.takeStereoScreenshot(base + "-preview", base + "-vr")
             print(f"screenshot: {base}-vr.png", flush=True)
+            # Cuff for PC lists it without a Refresh; a moment later, once OpenVR has written both files.
+            threading.Timer(SCREENSHOT_NUDGE_S, pc.nudge, args=("screenshot",)).start()
         except openvr.error_code.OpenVRError as e:
             print(f"screenshot: {e!r}", file=sys.stderr, flush=True)
 
@@ -450,7 +456,7 @@ def main(debug=False):
         if name == "q:dictation":
             stt.toggle()
         elif name == "q:screenshot":
-            shot_at[0] = time.monotonic() + SCREENSHOT_DELAY_S
+            shot_at[0] = time.monotonic() + SCREENSHOT_DELAY_S + SCREENSHOT_SETTLE_S  # 3, 2, 1, the camera
         elif name == "q:passthrough":
             toggle_passthrough()
         elif name == "q:recenter":
@@ -505,12 +511,14 @@ def main(debug=False):
                         # the blink, so it doesn't flip the state back to on.
                         roomview.note(False, settle=BLINK_SETTLE_S)
                 if shot_at[0] is not None:
-                    if now >= shot_at[0]:
+                    left = shot_at[0] - now
+                    if left <= 0:
                         shot_at[0] = None
-                        quick.set_countdown(None)
                         take_screenshot()
+                    elif left <= SCREENSHOT_SETTLE_S:
+                        quick.set_countdown(None)  # the camera, in time to be in the picture
                     else:
-                        quick.set_countdown(math.ceil(shot_at[0] - now))
+                        quick.set_countdown(math.ceil(left - SCREENSHOT_SETTLE_S))
                 want, deadline = passthrough_wanted
                 if now - last_roomview > (0.25 if want is not None else 2):
                     last_roomview = now

@@ -243,7 +243,7 @@ tab, or none, is remembered across restarts (`~/.cache/cuff/state.json`).
   | Passthrough (eye) | SteamVR Room View on/off. Teal while on, following SteamVR's real state; greyed out if SteamVR's mailbox isn't there or didn't respond. | SteamVR's mailbox; see "Passthrough" below |
   | Recenter (target) | Resets the forward direction and makes a new chaperone bubble where you stand, as holding the Steam button does, so a popped bubble's forced passthrough ends. Room View blinks on for 0.3 s to do it (skipped while Room View is on by choice). | `seated_and_standing_position_reset` to SteamVR's `vrcompositor_systemlayer` mailbox (`vrcmd --recenter` if that fails), then Room View on and off: turning it on clears the bubble ("Clearing chaperone bubble because room view for scene apps was enabled") and turning it off creates one ("Creating chaperone bubble because room view was turned off…"). The reset alone, by either route, left the old bubble popped. |
   | Record (dot, a stop square while recording) | The Record charm's button: saves a clip, or starts or stops a recording, as its Quick action setting says. Red while recording; greyed out without the recorder. It replaced the SteamVR keyboard button. | `[quick.record]` in the Record charm; `quick_press` on the charm worker |
-  | Screenshot (camera) | Saves a stereo screenshot to `~/Pictures/Frame screenshots/` (`*-vr.png` and `*-preview.png`) 3 s after the tap (the button counts down 3, 2, 1 in amber), so you can turn the panel out of view; the wrist buzzes as it's taken. | OpenVR `TakeStereoScreenshot` on the overlay thread; `vrcmd --screenshot` did nothing on the Frame |
+  | Screenshot (camera) | Saves a stereo screenshot to `~/Pictures/Frame screenshots/` (`*-vr.png` and `*-preview.png`) 3.4 s after the tap (the button counts down 3, 2, 1 in amber, then shows the camera again 0.4 s before the shot, so a picture of the panel has the camera on it, not a "1"), so you can turn the panel out of view; the wrist buzzes as it's taken. | OpenVR `TakeStereoScreenshot` on the overlay thread; `vrcmd --screenshot` did nothing on the Frame |
 
 - **Scrolling line.** A charm can mark one line to scroll (`marquee()`; Now playing's
   song title). Too long for its box, it scrolls: it pauses 2 s, moves
@@ -601,7 +601,8 @@ sha256(body)`)),
     both ends, also works as a bearer token. A signed upload is read before the 401, so the
     client sees the answer.
   - **From the PC itself**, routes that trust 127.0.0.1 (`/pair/open`, `/pair/confirm`, and
-    `/stream`, `/transcribe`, `/typing/next` without a signature) need the app page's guard too:
+    `/stream`, `/transcribe`, `/typing/next` without a signature, `/recordings/changed`) need
+    the app page's guard too:
     a `Host` of 127.0.0.1 or localhost and `X-Cuff-App: 1`; JSON bodies must be sent as
     `application/json`. So a web page in a browser on the PC can't use them.
   - **Clocks:** the headset's and PC's clocks must agree to within a minute (both normally set

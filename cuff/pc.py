@@ -441,6 +441,25 @@ class Pc(threading.Thread):
         current = self._current()
         return {MARKER: current[0]} if current else {}
 
+    def nudge(self, what):
+        """Tell Cuff for PC that a screenshot, clip or recording was just saved, so its Recordings
+        page shows it without a Refresh (and fetches it, if it downloads automatically). In the
+        background, and quietly nothing when no paired PC is reachable or it's an older one."""
+        base = self.url()
+        if not base:
+            return
+
+        def send():
+            req = urllib.request.Request(base + "/recordings/changed", data=json.dumps({"what": what}).encode(),
+                                         headers={"Content-Type": "application/json", **self.headers()}, method="POST")
+            try:
+                with urllib.request.urlopen(req, timeout=3):
+                    pass
+            except (OSError, ValueError):
+                pass
+
+        threading.Thread(target=send, daemon=True, name="pc-nudge").start()
+
     def state(self):
         if self.configured:
             return "connected" if self._configured_token() else "unpaired"

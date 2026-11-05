@@ -55,7 +55,15 @@ Inno Setup; see "The installer").
     checked every minute while the headset is connected, once a file hasn't changed for 20 s
     (so not a video being recorded). **Then delete them from the headset** deletes only what
     the automatic download fetched, after checking each download's size.
-  - **Screenshots,** below the videos: the screenshot button's pictures, newest first, each
+  - **New ones show up by themselves:** when the headset saves a screenshot, clip or
+    recording, it sends Cuff for PC a signed nudge (`POST /recordings/changed`), and the list
+    is read again straight away, so the page shows it without Refresh. With automatic
+    downloads on, it's fetched then too: at once if it's settled, else once `SETTLED_S`
+    (20 s) has passed. A headset older than v1.2 doesn't nudge; opening Recordings lists them.
+  - **Videos | Screenshots:** a switch at the top shows one list at a time, with each one's
+    count; the last choice is remembered. The Overview's counts link to each list
+    (`#videos`, `#screenshots`).
+  - **Screenshots:** the screenshot button's pictures, newest first, each
     with a thumbnail (the one-eye preview), its time and size, Download or Open (in the PC's
     own viewer, once downloaded) and Delete (two clicks, both files of the pair). Clicking
     the thumbnail shows it larger, one eye or both. **Download all new** fetches every one not

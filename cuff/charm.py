@@ -164,6 +164,13 @@ class Context:
         pc = self.services and self.services.pc
         return pc.headers() if pc else {}
 
+    def recordings_changed(self):
+        """Tell Cuff for PC a video was just saved, so its Recordings page shows it without a
+        Refresh. Needs no permission: only the nudge is sent, nothing about the video."""
+        pc = self.services and self.services.pc
+        if pc:
+            pc.nudge("recordings")
+
     def pc_state(self):
         """"connected", "unpaired" (there, not paired yet), "away" (known but not reachable
         now) or "missing" (never seen). Needs no permission."""

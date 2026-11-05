@@ -162,6 +162,7 @@ wide). Colours are fg, dim, green, amber, red, blue, or an `(r, g, b, a)` tuple.
 | `ctx.notify(text, haptic=False, glow="white", icon=None)` | toasts | A toast above the panel. `haptic=True` makes it an alert: a buzz, a chime, and a glow on the hand while the panel is turned away. `glow` is white, orange or red; `icon` is a PIL image or a PNG in the charm's folder, drawn in the glow. |
 | `ctx.stats()`, `ctx.stats_history()` | frame-stats | SteamVR's frame timing, sampled once a second (see `cuff/services.py`). |
 | `ctx.pc_url()`, `ctx.pc_headers()` | pc | Reach Cuff for PC: send `pc_headers()` with every request. |
+| `ctx.recordings_changed()` | | Tell Cuff for PC a video was just saved, so its Recordings page shows it without a Refresh. Only the nudge is sent. |
 | `ctx.pc_state()` | | `"connected"`, `"unpaired"`, `"away"` or `"missing"`. Show `cuff.pc.needs_pc(state)` in a PC-only field rather than a guess. |
 
 ## Permissions

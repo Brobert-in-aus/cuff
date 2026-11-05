@@ -281,6 +281,15 @@ def make_handler(stt, pairing, app=None, typing=None):
                 if path == "/pair/confirm":
                     return self._json(*pairing.confirm(body))
                 return self._reply(app.post(path, body))
+            if path == "/recordings/changed" and app:
+                # The headset saved a screenshot, clip or recording: Recordings lists it now.
+                n = self._length()
+                if not 0 <= n <= 4096:
+                    return self._json(413, {"error": "too large"})
+                if not self._authorised(self.rfile.read(n)):
+                    return
+                app.videos.nudge()
+                return self._json(200, {"ok": True})
             if path != "/transcribe" or stt is None:
                 return self._json(404, {"error": "not found"})
             n = self._length()
