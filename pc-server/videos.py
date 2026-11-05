@@ -1,19 +1,29 @@
-"""The headset's clips and recordings, from the PC app: list them with a thumbnail and length,
-download them, delete them on the headset, and (if turned on) download new ones by themselves.
+"""The headset's clips, recordings and screenshots, from the PC app: list them with a
+thumbnail (and a video's length), download them, delete them on the headset, and (if turned on)
+download new ones by themselves.
 
 - Listing: python -m cuff.remote videos on the headset; each video's length and a thumbnail
   come from the headset's ffprobe and ffmpeg, once each, cached on the PC
   (%LOCALAPPDATA%\\cuff-pc\\thumbs).
-- Downloading: over SFTP into the chosen folder (default: Videos\\Cuff, clips in clips\\), as
-  name.part until it's whole. One at a time, with progress. A video already there at the same
-  size counts as downloaded.
+- Screenshots: Cuff's screenshot button saves a pair, <time>-vr.png (both eyes) and
+  <time>-preview.png (one). cuff.remote videos lists them too, after v1.0.0; a headset with
+  v1.0.0 (no "screenshots" in its answer) has them listed over SFTP from the default folder,
+  ~/Pictures/Frame screenshots. A thumbnail is the preview, made smaller here (Pillow) and
+  cached with the videos' ones.
+- Downloading: over SFTP into the chosen folder (default: Videos\\Cuff, clips in clips\\,
+  screenshots in screenshots\\), as name.part until it's whole. One file at a time, with
+  progress; a screenshot is its two files. A file already there at the same size counts as
+  downloaded.
 - Automatic downloads: every AUTO_EVERY_S while connected, new videos (clips, recordings or
-  both) that haven't changed for SETTLED_S (so not one still being recorded) are downloaded.
-  "Then delete them from the headset" removes each only after its download is checked.
-- Deleting: only files directly in ~/Videos/framecorder or its clips/ folder.
+  both) and screenshots that haven't changed for SETTLED_S (so not one still being recorded)
+  are downloaded. "Then delete them from the headset" removes each file only after its
+  download is checked.
+- Deleting: only files directly in ~/Videos/framecorder or its clips/ folder, and screenshot
+  pairs directly in the screenshot folder.
 
 Settings in %LOCALAPPDATA%\\cuff-pc\\videos.json.
 """
+import io
 import json
 import os
 import posixpath
@@ -22,6 +32,7 @@ import threading
 import time
 
 import paramiko
+from PIL import Image
 
 from frame import DATA
 
@@ -29,10 +40,40 @@ SETTINGS = os.path.join(DATA, "videos.json")
 THUMBS = os.path.join(DATA, "thumbs")
 REMOTE = "Videos/framecorder"  # under the headset's home, as cuff.remote reports
 SAFE = re.compile(r"^(clips/)?[\w.-]+\.mp4$")
+SHOTS_DEFAULT = "Pictures/Frame screenshots"  # under the headset's home: v1.0.0's cuff.remote doesn't say
+SHOT_NAME = re.compile(r"^[\w.-]+$")  # a pair's <time>
+SHOT_FILE = re.compile(r"^([\w.-]+)-(vr|preview)\.png$")
+SHOT_DIR = "screenshots/"  # a screenshot file's download path is screenshots/<file>, beside clips/
 AUTO_EVERY_S = 60
 SETTLED_S = 20
 DEFAULTS = {"folder": os.path.join(os.path.expanduser("~"), "Videos", "Cuff"), "auto": False,
-            "auto_clips": True, "auto_recordings": True, "delete_after": False}
+            "auto_clips": True, "auto_recordings": True, "auto_screenshots": True, "delete_after": False}
+
+
+def group_shots(files):
+    """cuff.remote's screenshot list, from [(file name, size, mtime)] in the screenshot folder
+    (for a headset whose cuff.remote doesn't list them)."""
+    shots = {}
+    for name, size, mtime in files:
+        m = SHOT_FILE.match(name)
+        if not m:
+            continue
+        shot = shots.setdefault(m[1], {"name": m[1], "vr": None, "preview": None, "sizes": {}, "size": 0, "mtime": 0})
+        shot[m[2]] = name
+        shot["sizes"][name] = size
+        shot["size"] += size
+        shot["mtime"] = max(shot["mtime"], mtime)
+    return sorted(shots.values(), key=lambda s: s["mtime"], reverse=True)
+
+
+def shot_files(shot):
+    """A screenshot's files that are there, as download paths (screenshots/<file>)."""
+    return [SHOT_DIR + shot[k] for k in ("vr", "preview") if shot.get(k)]
+
+
+def downloadable(path):
+    """A path the page may download: a video, or one of a screenshot's two files."""
+    return bool(SAFE.match(path) or (path.startswith(SHOT_DIR) and SHOT_FILE.match(path[len(SHOT_DIR):])))
 
 
 class Videos:
@@ -47,6 +88,8 @@ class Videos:
             pass
         self.listing = []  # the last list from the headset
         self.listed_at = 0.0
+        self.shots = []  # its screenshots (cuff.remote's list, or group_shots')
+        self.shot_folder = None  # where they are on the headset, once listed
         self.meta = {}  # remote path -> {"seconds", "thumb"}
         self.queue = []  # remote paths to download, in order
         self.current = None  # {"path", "done", "size"} while downloading
@@ -68,11 +111,33 @@ class Videos:
     # ---------------------------------------------------------------- the headset's videos
 
     def refresh(self):
-        listing = self.frame.remote("videos")["videos"]
+        out = self.frame.remote("videos")
+        listing = out["videos"]
+        if "screenshots" in out:
+            folder, shots = out["screenshot_folder"], out["screenshots"]
+        else:
+            folder, shots = self._list_shots()
+        shots = [s for s in shots if SHOT_NAME.match(s["name"])]
         with self.lock:
             self.listing, self.listed_at = listing, time.time()
+            self.shots, self.shot_folder = shots, folder
         self._fill_meta(listing[:24])
         return listing
+
+    def _list_shots(self):
+        """(folder, screenshots) over SFTP from the default folder, for v1.0.0's cuff.remote,
+        which doesn't list them."""
+        with self.frame.sftp() as sftp:
+            folder = posixpath.join(sftp.normalize("."), SHOTS_DEFAULT)
+            try:
+                files = [(a.filename, a.st_size, a.st_mtime) for a in sftp.listdir_attr(folder)]
+            except FileNotFoundError:
+                files = []  # no screenshots taken yet
+        return folder, group_shots(files)
+
+    def _shot_path(self, sftp, name):
+        """A screenshot file's path on the headset."""
+        return posixpath.join(self.shot_folder or posixpath.join(sftp.normalize("."), SHOTS_DEFAULT), name)
 
     def _fill_meta(self, listing):
         """Lengths for the videos without one (one ffprobe for all), on the headset."""
@@ -117,12 +182,48 @@ class Videos:
         with open(local, "rb") as f:
             return f.read()
 
+    def shot_thumbnail(self, name):
+        """A JPEG of a screenshot file, 480 px across, made here once from its PNG and kept."""
+        if not SHOT_FILE.match(name):
+            raise ValueError("not a screenshot")
+        os.makedirs(THUMBS, exist_ok=True)
+        local = os.path.join(THUMBS, "screenshot_" + name[:-4] + ".jpg")
+        if not os.path.exists(local):
+            img = Image.open(io.BytesIO(self.shot_image(name)))
+            img.thumbnail((480, 480))
+            out = io.BytesIO()
+            img.convert("RGB").save(out, "JPEG", quality=80)
+            with open(local, "wb") as f:
+                f.write(out.getvalue())
+        with open(local, "rb") as f:
+            return f.read()
+
+    def shot_image(self, name):
+        """A screenshot file's PNG: the downloaded copy, or the headset's."""
+        if not SHOT_FILE.match(name):
+            raise ValueError("not a screenshot")
+        local = self.local_path(SHOT_DIR + name)
+        if os.path.exists(local):
+            with open(local, "rb") as f:
+                return f.read()
+        data = io.BytesIO()
+        with self.frame.sftp() as sftp:
+            sftp.getfo(self._shot_path(sftp, name), data)
+        return data.getvalue()
+
     def local_path(self, path):
         return os.path.join(self.settings["folder"], *path.split("/"))
 
     def downloaded(self, video):
         try:
             return os.path.getsize(self.local_path(video["path"])) == video["size"]
+        except OSError:
+            return False
+
+    def shot_downloaded(self, shot):
+        """Whether a screenshot's files (both, or the one there is) are here at their sizes."""
+        try:
+            return all(os.path.getsize(self.local_path(SHOT_DIR + n)) == size for n, size in shot["sizes"].items())
         except OSError:
             return False
 
@@ -138,10 +239,42 @@ class Videos:
             self.listing = [v for v in self.listing if v["path"] != path]
         return True, "Deleted from the headset."
 
+    def delete_shot(self, name):
+        """Delete a screenshot's two files on the headset."""
+        if not SHOT_NAME.match(name):
+            return False, "Not a screenshot."
+        try:
+            with self.frame.sftp() as sftp:
+                for kind in ("vr", "preview"):
+                    try:
+                        sftp.remove(self._shot_path(sftp, f"{name}-{kind}.png"))
+                    except FileNotFoundError:
+                        pass
+        except OSError as e:  # ConnectionError included
+            return False, f"Couldn't delete it: {e}"
+        with self.lock:
+            self.shots = [s for s in self.shots if s["name"] != name]
+        return True, "Deleted from the headset."
+
+    def _forget(self, path):
+        """Take a file deleted after its download out of the lists: a video, or one of a
+        screenshot's files (the screenshot goes with its last)."""
+        name = path[len(SHOT_DIR):] if path.startswith(SHOT_DIR) else None
+        with self.lock:
+            self.listing = [v for v in self.listing if v["path"] != path]
+            shots = []
+            for s in self.shots:
+                if name in s["sizes"]:
+                    s = {**s, **{k: None for k in ("vr", "preview") if s[k] == name},
+                         "sizes": {n: b for n, b in s["sizes"].items() if n != name}}
+                if s["sizes"]:
+                    shots.append(s)
+            self.shots = shots
+
     def download(self, paths):
         with self.lock:
             for p in paths:
-                if SAFE.match(p) and p not in self.queue and (not self.current or self.current["path"] != p):
+                if downloadable(p) and p not in self.queue and (not self.current or self.current["path"] != p):
                     self.queue.append(p)
         self.wake.set()
         return True, "Queued."
@@ -173,15 +306,37 @@ class Videos:
             if wanted and time.time() - v["mtime"] > SETTLED_S and not self.downloaded(v):
                 self.auto_paths.add(v["path"])
                 self.download([v["path"]])
+        if s["auto_screenshots"]:
+            with self.lock:
+                shots = list(self.shots)  # refresh() above listed them
+            for shot in shots:
+                if time.time() - shot["mtime"] > SETTLED_S and not self.shot_downloaded(shot):
+                    self.auto_paths.update(shot_files(shot))
+                    self.download(shot_files(shot))
+
+    def _mtime(self, path):
+        """The listed time of a video or screenshot file, for its download; None if it isn't listed."""
+        name = path[len(SHOT_DIR):]
+        with self.lock:
+            for v in self.listing:
+                if v["path"] == path:
+                    return v["mtime"]
+            for s in self.shots:
+                if path.startswith(SHOT_DIR) and name in s["sizes"]:
+                    return s["mtime"]
+        return None
 
     def _fetch(self, path):
-        video = next((v for v in self.listing if v["path"] == path), None)
+        mtime = self._mtime(path)
         local = self.local_path(path)
         retry = False
         try:
             os.makedirs(os.path.dirname(local), exist_ok=True)
             with self.frame.sftp() as sftp:
-                remote = posixpath.join(sftp.normalize("."), REMOTE, path)
+                if path.startswith(SHOT_DIR):
+                    remote = self._shot_path(sftp, path[len(SHOT_DIR):])
+                else:
+                    remote = posixpath.join(sftp.normalize("."), REMOTE, path)
                 size = sftp.stat(remote).st_size
                 with self.lock:
                     self.current = {"path": path, "done": 0, "size": size}
@@ -193,14 +348,13 @@ class Videos:
                 if os.path.getsize(local + ".part") != size:
                     raise OSError("the download came out the wrong size")
                 os.replace(local + ".part", local)
-                if video:
-                    os.utime(local, (video["mtime"], video["mtime"]))
+                if mtime:
+                    os.utime(local, (mtime, mtime))
                 print(f"videos: downloaded {path}", flush=True)
                 if path in self.auto_paths and self.settings["delete_after"]:
                     sftp.remove(remote)
                     print(f"videos: deleted {path} from the headset after downloading it", flush=True)
-                    with self.lock:
-                        self.listing = [v for v in self.listing if v["path"] != path]
+                    self._forget(path)
         except (OSError, paramiko.SSHException, EOFError) as e:  # a lost connection is a ConnectionError (OSError)
             self._error(f"{path}: {e}")
             try:
@@ -225,6 +379,8 @@ class Videos:
     def state(self):
         with self.lock:
             listing = [{**v, **self.meta.get(v["path"], {}), "downloaded": self.downloaded(v)} for v in self.listing]
-            return {"settings": self.settings, "videos": listing, "listed_at": self.listed_at,
+            shots = [{**s, "files": shot_files(s), "downloaded": self.shot_downloaded(s)} for s in self.shots]
+            return {"settings": self.settings, "videos": listing, "screenshots": shots,
+                    "screenshot_folder": self.shot_folder, "listed_at": self.listed_at,
                     "queue": list(self.queue), "current": dict(self.current) if self.current else None,
                     "errors": list(self.errors)}

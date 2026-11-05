@@ -20,7 +20,7 @@ import threading
 import time
 
 from . import charm as charms
-from . import config, quickrow, steam, ui
+from . import config, keyboard, quickrow, steam, ui
 from . import chime
 from .atomic import atomic_write_json
 from .dictation import Dictation
@@ -42,6 +42,7 @@ ORB_WIDTH = TIP_DIAMETER / 0.42  # the core twice the touch sphere's size
 ORB_S, ORB_PULSE_S, ORB_MAX, ORB_SPACING = 8.0, 1.2, 4, 0.036
 CONTROLLER_BODY = 0.04  # the controller's middle, this far back from its tip pose (+Z)
 ORB_BEHIND = 0.07  # the glows' distance past the controller's middle, away from the head
+ORB_ABOVE = 0.07  # and up from it, as seen from the head, so the controller doesn't hide them
 
 GHOST_COLOUR, GHOST_ALPHA = (52, 132, 255, 255), 0.2  # the placement preview: flat blue, 20 %
 PANEL_DIM = 0.5  # the panel's opacity while the preview is behind it, so the preview shows through
@@ -283,11 +284,22 @@ def main(debug=False):
     pc.notify = lambda text, haptic: services.toasts.push("pairing", text, haptic)
     pc.pin = lambda text, key="pairing": services.toasts.pin(key, text) if text else services.toasts.unpin(key)
     pc.typing_allowed = lambda: services.prefs.get("typing")
-    stt, quick = Dictation(changed, pc), Quick(changed)
+    mic = []  # the dictation key on Steam's keyboard (keyboard.py), if it's on
+
+    def dictation_changed():
+        changed()
+        for m in mic:
+            m.notify()
+
+    stt, quick = Dictation(dictation_changed, pc), Quick(changed)
     if stt.state["configured"] and not stt.cmd:
         # Dictation types through Steam: if a Steam call fails, grey its button out again until
         # Steam's text input answers (the check Dictation runs at startup).
         steam.on_typing_lost(stt.recheck_typing)
+    if stt.state["configured"] and config.CONFIG.get("dictation", {}).get("keyboard_key", True):
+        # Steam's keyboard hides the panel while it's open, so it gets a dictation key too.
+        mic.append(keyboard.KeyboardMic(stt.toggle, lambda: stt.state))
+        mic[0].start()
     tabs = charms.load(changed, services)
     renderer = Renderer(stt, quick, tabs, services)
     presses = Presses(renderer)
@@ -716,14 +728,16 @@ def main(debug=False):
                 if alpha > 0:
                     lit.clear()  # seen
                 lit[:] = [o for o in lit if o[2] > now][-ORB_MAX:]
-                # The row sits on the far side of the wearing hand's controller from the head: ORB_BEHIND past
-                # its body along the line from the eyes, running sideways across the view.
+                # The row sits on the far side of the wearing hand's controller from the head, ORB_BEHIND past
+                # its body along the line from the eyes, and ORB_ABOVE up from that line as you see it
+                # (straight behind, the controller hid it). It runs sideways across the view.
                 row = None
                 if hmd is not None and wear in hand:
                     body = origin(mul(hand[wear], translation(0, 0, CONTROLLER_BODY)))
                     away = vr.norm(vr.sub(body, origin(hmd)))
                     side = vr.norm(vr.cross((0.0, 1.0, 0.0), away))
-                    row = (tuple(b + a * ORB_BEHIND for b, a in zip(body, away)), side)
+                    up = vr.cross(away, side)  # up across the view, square to the line from the eyes
+                    row = (tuple(b + a * ORB_BEHIND + u * ORB_ABOVE for b, a, u in zip(body, away, up)), side)
                 for i, layer in enumerate(orbs):
                     if row is None or i >= len(lit):
                         layer.place(None, 0.0, False)

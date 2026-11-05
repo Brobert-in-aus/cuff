@@ -50,7 +50,9 @@ def _ws_send(s, text):
     s.sendall(bytes(hdr) + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(data)))
 
 
-def _ws_recv(s):
+def _ws_frame(s):
+    """(opcode, payload) of the next frame: 1 text, 8 close, 9 ping (the debugger doesn't
+    mask or fragment what it sends)."""
     def exact(n):
         buf = b""
         while len(buf) < n:
@@ -59,13 +61,26 @@ def _ws_recv(s):
                 raise EOFError
             buf += chunk
         return buf
-    _, b2 = exact(2)
+    b1, b2 = exact(2)
     n = b2 & 0x7F
     if n == 126:
         n = struct.unpack(">H", exact(2))[0]
     elif n == 127:
         n = struct.unpack(">Q", exact(8))[0]
-    return exact(n)
+    return b1 & 0x0F, exact(n)
+
+
+def _ws_recv(s):
+    return _ws_frame(s)[1]
+
+
+def page_socket(title):
+    """A WebSocket to the debugger's page with this title (keyboard.py keeps one open)."""
+    targets = json.load(urllib.request.urlopen("http://127.0.0.1:8080/json", timeout=5))
+    url = next(t["webSocketDebuggerUrl"] for t in targets if t.get("type") == "page" and t["title"] == title)
+    host_port, path = url[len("ws://"):].split("/", 1)
+    host, port = host_port.split(":")
+    return _ws_connect(host, int(port), "/" + path)
 
 
 class SteamError(ValueError):

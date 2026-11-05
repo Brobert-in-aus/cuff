@@ -15,6 +15,7 @@ your speech) and gone after five idle minutes.
   local = true                       fall back to the headset's own model
   max_seconds = 60
   trailing_space = true
+  keyboard_key = true                a dictation key on Steam's own keyboard too (keyboard.py)
   command = ["~/bin/dictate", "ptt"] run this instead: an external push-to-talk command that
   env = { DICTATE_STATUS = "stdout" }   stops on SIGUSR1, types the text itself, and prints
                                          {"phase", "text"} JSON lines

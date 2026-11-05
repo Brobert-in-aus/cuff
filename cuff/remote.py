@@ -4,7 +4,7 @@
   python -m cuff.remote apply < JSON  {section id: {key: value}}: saves them, then tells Cuff
                                       (SIGHUP) to take up the live ones; prints {"errors",
                                       "restart": whether a change waits for a Cuff restart}
-  python -m cuff.remote videos        the clips and recordings, as JSON
+  python -m cuff.remote videos        the clips and recordings, and the screenshots, as JSON
 
 Each prints a JSON object with "api": the protocol version (API), for Cuff for PC to compare.
 
@@ -24,6 +24,7 @@ It reads charm.toml files and doesn't load charms, so it runs beside a running C
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -41,6 +42,8 @@ API = 1
 CONFIG_DIR = os.path.dirname(config.CONFIG_FILE)
 VIDEOS = os.path.expanduser("~/Videos/framecorder")
 RECORDING_NOW_S = 10  # a video written to this recently is probably still being recorded
+SCREENSHOTS = os.path.expanduser(config.PROFILE["screenshot_dir"])
+SHOT_FILE = re.compile(r"^(.+)-(vr|preview)\.png$")  # app.py's pair: <time>-vr.png, <time>-preview.png
 
 
 def _manifests():
@@ -301,7 +304,7 @@ def reload_cuff():
                    capture_output=True, timeout=10)
 
 
-# ---------------------------------------------------------------- recordings
+# ---------------------------------------------------------------- recordings and screenshots
 
 def recording_now():
     """Whether a video was written to in the last few seconds (a recording going)."""
@@ -330,6 +333,30 @@ def videos():
     return sorted(out, key=lambda v: v["mtime"], reverse=True)
 
 
+def screenshots():
+    """[{"name" (the pair's <time>), "vr", "preview" (file names, or None when missing),
+    "sizes" ({file name: bytes}), "size" (both), "mtime" (the newer)}], newest first."""
+    shots = {}
+    try:
+        names = os.listdir(SCREENSHOTS)
+    except OSError:
+        return []
+    for name in names:
+        m = SHOT_FILE.match(name)
+        if not m:
+            continue
+        try:
+            st = os.stat(os.path.join(SCREENSHOTS, name))
+        except OSError:
+            continue
+        shot = shots.setdefault(m[1], {"name": m[1], "vr": None, "preview": None, "sizes": {}, "size": 0, "mtime": 0})
+        shot[m[2]] = name
+        shot["sizes"][name] = st.st_size
+        shot["size"] += st.st_size
+        shot["mtime"] = max(shot["mtime"], st.st_mtime)
+    return sorted(shots.values(), key=lambda s: s["mtime"], reverse=True)
+
+
 def main(argv):
     cmd = argv[0] if argv else ""
     if cmd == "dump":
@@ -337,7 +364,8 @@ def main(argv):
     elif cmd == "apply":
         out = {"api": API, **apply(json.load(sys.stdin))}
     elif cmd == "videos":
-        out = {"api": API, "folder": VIDEOS, "videos": videos(), "recording": recording_now()}
+        out = {"api": API, "folder": VIDEOS, "videos": videos(), "recording": recording_now(),
+               "screenshot_folder": SCREENSHOTS, "screenshots": screenshots()}
     else:
         print(__doc__, file=sys.stderr)
         return 2

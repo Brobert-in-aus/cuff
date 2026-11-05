@@ -2,7 +2,7 @@
 
 Cuff for PC is one Python process on Windows: the server the headset talks to (dictation,
 stream stats, pairing), a tray icon, and a window. From the window it also sets up the
-headset: installing and updating Cuff, its recordings, every Cuff setting, and typing on it
+headset: installing and updating Cuff, its recordings and screenshots, every Cuff setting, and typing on it
 from the PC keyboard.
 
 Built 2026-10-26. The Windows installer is written and staged, but not yet compiled (it needs
@@ -51,10 +51,15 @@ Inno Setup; see "The installer").
   (two clicks; it warns when a video isn't on the PC yet).
   - **Download all new**, and the download folder (default `Videos\Cuff`; **Change…** opens
     Windows' folder picker).
-  - **Download new videos automatically:** clips, recordings or both, checked every
-    minute while the headset is connected, once a video hasn't changed for 20 s (so not one
-    being recorded). **Then delete them from the headset** deletes only what the automatic
-    download fetched, after checking each download's size.
+  - **Download new ones automatically:** clips, recordings, screenshots, or any of them,
+    checked every minute while the headset is connected, once a file hasn't changed for 20 s
+    (so not a video being recorded). **Then delete them from the headset** deletes only what
+    the automatic download fetched, after checking each download's size.
+  - **Screenshots,** below the videos: the screenshot button's pictures, newest first, each
+    with a thumbnail (the one-eye preview), its time and size, Download or Open (in the PC's
+    own viewer, once downloaded) and Delete (two clicks, both files of the pair). Clicking
+    the thumbnail shows it larger, one eye or both. **Download all new** fetches every one not
+    on the PC yet.
 - **Cuff settings:** everything Cuff's Settings tab and charms set on the wrist, read from
   the headset: wrist placement (sliders), the quick row (six slots), alerts and low
   battery levels, Record's settings, charms on or off, and the tab order. Changes collect
@@ -100,7 +105,7 @@ Inno Setup; see "The installer").
 | `pc-server/appapi.py` | The page's API, and the guard on it (below) |
 | `pc-server/app.html` | The page: plain HTML and JavaScript, no build step; polls `/app/state` every 2 s |
 | `pc-server/frame.py` | The SSH link to the headset (`paramiko`): connecting, installing, pairing, settings |
-| `pc-server/videos.py` | Recordings: listing, thumbnails, downloads, automatic downloads |
+| `pc-server/videos.py` | Recordings and screenshots: listing, thumbnails, downloads, automatic downloads |
 | `pc-server/linkquality.py` | The Connection page: the PC's Wi-Fi adapters (Windows' WLAN API), the headset's radios (`iw` over SSH), round trips (Windows' ICMP API), and the stream's link (`stream.py`). No `netsh` or `ping` output is read: their labels follow the display language |
 | `cuff/remote.py` | On the headset: `python -m cuff.remote dump / apply / videos`, run by `frame.py` |
 
@@ -154,6 +159,16 @@ Inno Setup; see "The installer").
     and a 320 px JPEG, once, kept in `%LOCALAPPDATA%\cuff-pc\thumbs`.
   - **Downloads:** they go over SFTP to `name.part`, then are renamed, keeping the video's
     date. A file there at the same size counts as downloaded.
+  - **Screenshots:** `cuff.remote videos` also lists the screenshot folder (the profile's
+    `screenshot_dir`) as pairs: `<time>-vr.png` (both eyes, side by side) and
+    `<time>-preview.png` (one). A headset on v1.0.0, whose `cuff.remote` doesn't list them,
+    has `~/Pictures/Frame screenshots` listed over SFTP instead. A download is both files, in
+    the download folder's `screenshots\`. Thumbnails are the preview, shrunk to 480 px here
+    (Pillow) and kept with the videos' ones; the larger view is the PNG itself, from the
+    downloaded copy if there is one. Only names like `<time>-vr.png` and `<time>-preview.png`
+    (letters, digits, `.`, `-`, `_`) are served, downloaded or deleted, and only in that
+    folder. `/app/videos/screenshot`, an `<img>` source, takes the thumbnail key like
+    `/app/videos/thumb`.
 - **Heard from:** a paired headset says hello (a signed `GET /health`, which also checks the
   address is really this PC) once a minute, so the app and tray know it's about. Its address says the link: the Frame's own access
   point (10.35.78.0/24, which the dongle joins) is "over the dongle"; anything else is your

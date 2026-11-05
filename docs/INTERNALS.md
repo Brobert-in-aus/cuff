@@ -279,7 +279,7 @@ tab, or none, is remembered across restarts (`~/.cache/cuff/state.json`).
 | `cuff/status.py` | Battery readings for the status bar |
 | `cuff/config.py` | `config.toml`, the headset profile (the Frame's paths and mic node by default) and Cuff's directories |
 | `pc-server/` | Cuff for PC: the desktop app (`app.py`, `app.html`, `appapi.py`; see docs/PC-APP.md), dictation (`server.py`), the stream's PC side (`stream.py`), the announcement (`beacon.py`), the headset over SSH (`frame.py`, `videos.py`), and its Windows install (`install.ps1`, `firewall.ps1`) |
-| `cuff/remote.py` | Settings and videos for Cuff for PC: `python -m cuff.remote dump / apply / videos`, run over SSH; `apply` sends Cuff SIGHUP to reload |
+| `cuff/remote.py` | Settings, videos and screenshots for Cuff for PC: `python -m cuff.remote dump / apply / videos`, run over SSH; `apply` sends Cuff SIGHUP to reload |
 | `cuff/atomic.py` | Saves the JSON settings and state files atomically (temporary file, fsync, rename), for Cuff and `cuff.remote` alike |
 | `cuff.service` | The systemd user service |
 
@@ -477,6 +477,24 @@ enter and tab go through as `ControllerKeyboardSetKeyState` presses.
   it's stopped with `SIGUSR1`, types the text itself, and reports
   `{"phase": "listening" | "transcribing" | "done" | "error" | "idle", "text"}` JSON lines on
   stdout.
+- **A key on Steam's keyboard** (`cuff/keyboard.py`, `cuff/keyboard.js`). Selecting a text
+  field opens Steam's keyboard, which hides the panel (above), so the keyboard gets a mic key
+  of its own that does what the quick row's button does.
+  - **Where:** over the left end of the space bar, as wide as Steam's switch key beside it,
+    in the space bar's own colours. It's placed from the space bar's position every 0.5 s,
+    so it follows anything that resizes Steam's rows. Blue under the laser, red while
+    listening, amber while transcribing, dimmed when dictation can't type.
+  - **How:** one thread keeps a WebSocket to the debugger's "SteamVR - Keyboard" page. It
+    adds a `__cuffDictate` binding, which the key calls on a press. It injects
+    `keyboard.js` on every new JS context (a reload, Steam restarting), and calls
+    `__cuffMic.set({phase, ready})` when dictation's state changes. The press is kept from
+    Steam, so it doesn't type a space. It relies only on the page title and `data-key`
+    attributes, not Steam's generated class names. If the space bar can't be found, the key
+    doesn't show.
+  - **Off:** `[dictation] keyboard_key = false`.
+  - **Checked on the Frame (2026-11-03):** injected beside another add-on's extra row; a
+    press over the debugger started and stopped dictation; with the laser, the user dictated
+    into a text field and the space bar still typed spaces.
 
 
 ## Notifications and alerts
@@ -533,7 +551,12 @@ enter and tab go through as `ControllerKeyboardSetKeyState` presses.
   row (`quickrow.reload`), and calls each charm's `reload()` on a thread of its own. Charms on
   or off and the tab order (`charms.json`'s `order`, which wins over `config.toml`'s `tabs`)
   wait for a restart. Its output carries `"api": 1`, a protocol version for Cuff for PC to
-  compare.
+  compare. `videos` lists the clips and recordings (`"folder"`, `"videos"`, `"recording"`),
+  and, after v1.0.0, the screenshots too: `"screenshot_folder"` (the profile's
+  `screenshot_dir`, expanded) and `"screenshots"`, one entry per pair with its `"name"`
+  (`<time>`), `"vr"` and `"preview"` file names (null when that file's missing), `"sizes"`,
+  `"size"` and `"mtime"`. New keys keep `"api": 1`; Cuff for PC lists the default folder over
+  SFTP when they're absent.
 - **Saving settings.** Cuff and `cuff.remote` both write the JSON files under
   `~/.config/cuff` (and Cuff's cache) through `cuff/atomic.py`: a temporary file in the same
   folder, flushed to disk, then renamed over the old one, so a crash mid-write can't leave

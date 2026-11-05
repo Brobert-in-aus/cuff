@@ -1,11 +1,11 @@
 """The app page's API (app.html), answered only for the PC itself (docs/PC-APP.md).
 
-Every /app route but the page itself and thumbnails needs the header X-Cuff-App: 1, and every
-one needs a Host of 127.0.0.1 or localhost. A web page elsewhere can't add that header without
-the browser asking first (CORS preflight, which this server never allows), and a rebound DNS
-name fails the Host check, so only the app page can drive the headset from here. Thumbnails,
-for <img>, carry this run's random thumb_key (from /app/state, which only the page can read)
-instead of the header. server.py puts its other routes from the PC itself behind allowed() too.
+Every /app route but the page itself, thumbnails and screenshots needs the header X-Cuff-App:
+1, and every one needs a Host of 127.0.0.1 or localhost. A web page elsewhere can't add that
+header without the browser asking first (CORS preflight, which this server never allows), and a
+rebound DNS name fails the Host check, so only the app page can drive the headset from here.
+Thumbnails and screenshots, for <img>, carry this run's random thumb_key (from /app/state,
+which only the page can read) instead of the header. server.py puts its other routes from the PC itself behind allowed() too.
 
   GET  /app                    app.html
   GET  /app/state              the PC: headsets, pairing, dictation, the log; and the headset link
@@ -18,14 +18,17 @@ instead of the header. server.py puts its other routes from the PC itself behind
   POST /app/frame/restart      restart Cuff on the headset
   GET  /app/settings           Cuff's settings on the headset (cuff.remote dump)
   POST /app/settings           {section: {key: value}}
-  GET  /app/videos             the downloads' state and the last list
-  POST /app/videos/refresh     list the headset's videos again
-  POST /app/videos/download    {"paths": [...]}
-  POST /app/videos/delete      {"path"}
-  POST /app/videos/settings    {"folder", "auto", "auto_clips", "auto_recordings", "delete_after"}
-  POST /app/videos/open        {"path"} plays a downloaded one; {} opens the folder
+  GET  /app/videos             the downloads' state and the last lists (videos and screenshots)
+  POST /app/videos/refresh     list the headset's videos and screenshots again
+  POST /app/videos/download    {"paths": [...]}: videos, and screenshots' files (screenshots/<file>)
+  POST /app/videos/delete      {"path"}: a video; or {"shot"}: a screenshot's two files
+  POST /app/videos/settings    {"folder", "auto", "auto_clips", "auto_recordings", "auto_screenshots",
+                               "delete_after"}
+  POST /app/videos/open        {"path"} plays (or shows) a downloaded one; {} opens the folder
   POST /app/videos/choose      a folder picker; -> {"folder"}
   GET  /app/videos/thumb?key=&path=  a JPEG (key: /app/state's thumb_key)
+  GET  /app/videos/screenshot?key=&name=&thumb=1  a screenshot file: its PNG, or with thumb a
+                               small JPEG (name: <time>-vr.png or <time>-preview.png)
   POST /app/typing             {"text"} or {"key"}: type on the headset (typing_link.py)
   POST /app/typing/clipboard   type the clipboard's text
   POST /app/typing/open        the Type page is open (it says so every few seconds)
@@ -45,6 +48,7 @@ import typing_link
 
 HOSTS = ("127.0.0.1", "localhost")
 THUMB = "/app/videos/thumb"  # an <img> source: thumb_key instead of the header
+SHOT = "/app/videos/screenshot"  # the same
 
 
 class AppApi:
@@ -59,7 +63,7 @@ class AppApi:
             return False
         if path == "/app":
             return True
-        if path == THUMB:
+        if path in (THUMB, SHOT):
             key = dict(urllib.parse.parse_qsl(handler.path.partition("?")[2])).get("key", "")
             return hmac.compare_digest(key, self.thumb_key)
         return handler.headers.get("X-Cuff-App") == "1"
@@ -82,6 +86,14 @@ class AppApi:
                 return 200, self.videos.thumbnail(q.get("path", "")), "image/jpeg"
             except Exception as e:  # noqa: BLE001 - no thumbnail is no thumbnail
                 return 404, {"error": str(e)}
+        if path == SHOT:
+            try:
+                name = q.get("name", "")
+                if q.get("thumb"):
+                    return 200, self.videos.shot_thumbnail(name), "image/jpeg"
+                return 200, self.videos.shot_image(name), "image/png"
+            except Exception as e:  # noqa: BLE001 - a missing screenshot is a missing image
+                return 404, {"error": str(e)}
         return 404, {"error": "not found"}
 
     def post(self, path, body):
@@ -98,7 +110,8 @@ class AppApi:
             "/app/settings": lambda: f.apply_settings(body),
             "/app/videos/refresh": lambda: {"videos": v.refresh()},
             "/app/videos/download": lambda: v.download([str(p) for p in body.get("paths", [])]),
-            "/app/videos/delete": lambda: v.delete(str(body.get("path", ""))),
+            "/app/videos/delete": lambda: (v.delete_shot(str(body["shot"])) if "shot" in body
+                                           else v.delete(str(body.get("path", "")))),
             "/app/videos/settings": lambda: (v.save_settings(body), (True, "Saved."))[1],
             "/app/videos/open": lambda: self._open(body.get("path")),
             "/app/videos/choose": self._choose,

@@ -13,7 +13,8 @@ MIT licensed (`LICENSE`).
 - **Status bar:** the time, and the headset, controller and any Bluetooth headphone batteries,
   including whether a battery pack is keeping up. AirPods need LibrePods: see
   [AirPods battery](docs/AIRPODS.md).
-- **Quick actions:** dictation (talk, and the text is typed into the selected dialogue box), mic mute,
+- **Quick actions:** dictation (talk, and the text is typed into the selected dialogue box; Steam's
+  on-screen keyboard gets a mic key for it too, as the panel hides while that keyboard is open), mic mute,
   passthrough, recenter, record (a clip, or a recording, with the Record charm), and a
   screenshot (on a three second countdown). Choose which six show, and in what order, in
   Settings > Quick; charms can offer more, such as Now Playing's play/pause.
@@ -82,7 +83,7 @@ GPU and reports the game's side of a Steam Link stream to the Performance tab. I
 can also:
 
 - install and update Cuff on the headset over your network;
-- download your clips and recordings, by hand or automatically;
+- download your clips, recordings and screenshots, by hand or automatically;
 - change all of Cuff's settings with a mouse and keyboard;
 - type on the headset from the PC keyboard, or send it the clipboard (Ctrl+Alt+V);
 - show how good the connection is, over the dongle and your network, and while streaming.

@@ -83,6 +83,11 @@
   .bar { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
   .bar i { display: block; height: 100%; background: var(--accent); }
   .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .thumb.zoom { cursor: zoom-in; overflow: hidden; }  /* a portrait preview mustn't stretch its card */
+  .lightbox { position: fixed; inset: 0; z-index: 10; background: rgba(0,0,0,.72); display: flex; align-items: center; justify-content: center; padding: 24px; }
+  .lbox { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 10px; max-width: 100%; }
+  .lbox img { display: block; max-width: calc(100vw - 74px); max-height: calc(100vh - 140px); min-width: 240px; min-height: 135px;
+              object-fit: contain; border-radius: 8px; background: var(--input); }
 
   /* settings */
   .settings { display: grid; grid-template-columns: 200px 1fr; gap: 18px; align-items: start; }
@@ -271,7 +276,7 @@
 <!-- ======================================================= recordings -->
 <div class="page" id="page-recordings">
   <h1>Recordings</h1>
-  <p class="lead">Clips and recordings on the headset. Download them to this PC, by hand or automatically.</p>
+  <p class="lead">Clips, recordings and screenshots on the headset. Download them to this PC, by hand or automatically.</p>
   <section>
     <h2>Downloads</h2>
     <div class="actions">
@@ -280,10 +285,11 @@
       <button class="small" id="v-openfolder">Open folder</button>
     </div>
     <div style="margin-top:10px">
-      <label class="check"><input type="checkbox" id="v-auto"> <span>Download new videos automatically<div class="sub">Checks every minute while the headset's connected, once a video has finished</div></span></label>
+      <label class="check"><input type="checkbox" id="v-auto"> <span>Download new ones automatically<div class="sub">Checks every minute while the headset's connected, once a video has finished</div></span></label>
       <div id="v-auto-opts" style="padding-left:26px">
         <label class="check"><input type="checkbox" id="v-auto-clips"> <span>Clips</span></label>
         <label class="check"><input type="checkbox" id="v-auto-recordings"> <span>Recordings</span></label>
+        <label class="check"><input type="checkbox" id="v-auto-screenshots"> <span>Screenshots</span></label>
         <label class="check"><input type="checkbox" id="v-delete"> <span>Then delete them from the headset<div class="sub">Only after each download is checked</div></span></label>
       </div>
     </div>
@@ -295,6 +301,23 @@
     <span class="sub grow" id="v-summary"></span>
   </div>
   <div class="videos" id="videos"></div>
+  <h2 style="margin-top:26px">Screenshots</h2>
+  <div class="toolbar">
+    <button id="s-all">Download all new</button>
+    <span class="sub grow" id="s-summary"></span>
+  </div>
+  <div class="videos" id="shots"></div>
+  <div class="lightbox hidden" id="lightbox">
+    <div class="lbox">
+      <img id="lb-img" alt="">
+      <div class="actions">
+        <div class="seg"><button id="lb-one" class="on">One eye</button><button id="lb-both">Both eyes</button></div>
+        <span class="sub grow" id="lb-when"></span>
+        <button class="small" id="lb-get"></button>
+        <button class="small" id="lb-close">Close</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- ======================================================= settings -->
@@ -571,6 +594,8 @@ $("prompt-value").addEventListener("keydown", (e) => { if (e.key === "Enter") se
 
 // ------------------------------------------------------------ recordings
 let vstate = null, listedOnce = false;
+const VSWITCHES = [["v-auto", "auto"], ["v-auto-clips", "auto_clips"], ["v-auto-recordings", "auto_recordings"],
+                   ["v-auto-screenshots", "auto_screenshots"], ["v-delete", "delete_after"]];
 async function refreshVideos(fromHeadset) {
   if (fromHeadset && state && state.frame.connected) {
     const r = await api("/app/videos/refresh", {});
@@ -585,12 +610,11 @@ async function refreshVideos(fromHeadset) {
 function showVideos() {
   const v = vstate, s = v.settings;
   $("v-folder").textContent = s.folder;
-  for (const [id, key] of [["v-auto", "auto"], ["v-auto-clips", "auto_clips"], ["v-auto-recordings", "auto_recordings"], ["v-delete", "delete_after"]])
-    if (document.activeElement !== $(id)) $(id).checked = s[key];
+  for (const [id, key] of VSWITCHES) if (document.activeElement !== $(id)) $(id).checked = s[key];
   $("v-auto-opts").style.opacity = s.auto ? 1 : .5;
   $("v-errors").textContent = v.errors.slice(-1)[0] || "";
   const newOnes = v.videos.filter((x) => !x.downloaded);
-  $("ov-videos").textContent = v.listed_at ? `${v.videos.length} on the headset` : "Not listed yet";
+  $("ov-videos").textContent = v.listed_at ? `${v.videos.length} videos, ${v.screenshots.length} screenshots` : "Not listed yet";
   $("ov-videos-sub").textContent = (s.auto ? "Downloading new ones automatically" : "Automatic downloads are off") +
     (v.current ? ` · downloading ${v.current.path}` : "");
   $("v-summary").textContent = v.listed_at ? `${v.videos.length} videos · ${newOnes.length} not downloaded · ${bytes(v.videos.reduce((a, x) => a + x.size, 0))} on the headset` : "Connect to the headset to see its videos.";
@@ -598,6 +622,11 @@ function showVideos() {
   const box = $("videos");
   const cards = v.videos.map((x) => card(x, v));
   box.replaceChildren(...cards);
+  const newShots = v.screenshots.filter((x) => !x.downloaded);
+  $("s-summary").textContent = v.listed_at ? `${v.screenshots.length} screenshots · ${newShots.length} not downloaded · ${bytes(v.screenshots.reduce((a, x) => a + x.size, 0))} on the headset` : "";
+  $("s-all").disabled = !newShots.length;
+  $("shots").replaceChildren(...v.screenshots.map((x) => shotCard(x, v)));
+  if (lbShot) showLightbox();
 }
 const thumbs = {};
 function card(x, v) {
@@ -638,11 +667,84 @@ function card(x, v) {
   body.append(acts);
   return el("div", {className: "video"}, thumb, body);
 }
+// A screenshot is a pair: <time>-preview.png (one eye; the thumbnail) and <time>-vr.png (both).
+// Its images come from the headset (or the downloaded copy) through this run's thumb_key.
+const shotThumbs = {};
+function shotSrc(name, thumb) {
+  return "/app/videos/screenshot?key=" + encodeURIComponent(state ? state.thumb_key : "") + "&name=" + encodeURIComponent(name) + (thumb ? "&thumb=1" : "");
+}
+function shotButton(x, v, name) {
+  // Open the downloaded copy (name: which of the pair) in the PC's own viewer, or download it.
+  const current = v.current && x.files.includes(v.current.path), queued = x.files.some((f) => v.queue.includes(f));
+  if (x.downloaded) {
+    const open = el("button", {className: "small primary", textContent: "Open"});
+    open.onclick = () => api("/app/videos/open", {path: "screenshots/" + (name || x.preview || x.vr)});
+    return open;
+  }
+  const dl = el("button", {className: "small", textContent: current ? "Downloading…" : queued ? "Queued" : "Download", disabled: current || queued});
+  dl.onclick = async () => { await api("/app/videos/download", {paths: x.files}); refreshVideos(false); };
+  return dl;
+}
+function shotCard(x, v) {
+  const when = new Date(x.mtime * 1000), face = x.preview || x.vr;
+  const thumb = el("div", {className: "thumb zoom", title: "Look at it larger"});
+  if (Date.now() / 1000 - x.mtime > 5) {
+    if (state && state.thumb_key) {
+      shotThumbs[face] = shotThumbs[face] || el("img", {src: shotSrc(face, true), loading: "lazy", alt: ""});
+      shotThumbs[face].onerror = () => shotThumbs[face].remove();
+      thumb.append(shotThumbs[face]);
+    }
+  } else thumb.append("Saving…");
+  thumb.append(el("span", {className: "badge", textContent: x.vr ? "Screenshot" : "Screenshot · one eye"}));
+  thumb.onclick = () => { lbShot = x.name; lbBoth = false; showLightbox(); };
+  const body = el("div", {className: "vbody"},
+    el("div", {}, el("div", {textContent: when.toLocaleString([], {dateStyle: "medium", timeStyle: "medium"})}),
+      el("div", {className: "sub", textContent: bytes(x.size) + (x.downloaded ? " · on this PC" : "")})));
+  if (v.current && x.files.includes(v.current.path))
+    body.append(el("div", {className: "bar"}, el("i", {style: `width:${Math.round(100 * v.current.done / Math.max(1, v.current.size))}%`})));
+  const del = el("button", {className: "small", textContent: "Delete"});
+  del.onclick = async () => {
+    if (!twice("shot" + x.name, del, x.downloaded ? "Delete from headset?" : "Not on this PC! Delete?")) return;
+    const r = await api("/app/videos/delete", {shot: x.name});
+    if (!r.ok) $("v-errors").textContent = r.message;
+    refreshVideos(false);
+  };
+  body.append(el("div", {className: "actions"}, shotButton(x, v), del));
+  return el("div", {className: "video"}, thumb, body);
+}
+// The larger view: the one-eye preview, or both eyes side by side.
+let lbShot = null, lbBoth = false;
+function showLightbox() {
+  const x = vstate && vstate.screenshots.find((s) => s.name === lbShot);
+  if (!x) return closeLightbox();
+  const name = lbBoth && x.vr ? x.vr : x.preview || x.vr, img = $("lb-img");
+  if (img.dataset.name !== name) { img.src = shotSrc(name, false); img.dataset.name = name; }
+  $("lb-one").classList.toggle("on", name === x.preview);
+  $("lb-both").classList.toggle("on", name === x.vr);
+  $("lb-one").disabled = !x.preview; $("lb-both").disabled = !x.vr;
+  $("lb-when").textContent = new Date(x.mtime * 1000).toLocaleString([], {dateStyle: "medium", timeStyle: "medium"});
+  const get = shotButton(x, vstate, name);
+  get.id = "lb-get";
+  $("lb-get").replaceWith(get);
+  $("lightbox").classList.remove("hidden");
+}
+function closeLightbox() {
+  lbShot = null;
+  $("lightbox").classList.add("hidden");
+  $("lb-img").removeAttribute("src"); $("lb-img").dataset.name = "";
+}
+$("lb-one").onclick = () => { lbBoth = false; showLightbox(); };
+$("lb-both").onclick = () => { lbBoth = true; showLightbox(); };
+$("lb-close").onclick = closeLightbox;
+$("lightbox").onclick = (e) => { if (e.target.id === "lightbox") closeLightbox(); };
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && lbShot) closeLightbox(); });
+$("s-all").onclick = async () => { await api("/app/videos/download", {paths: vstate.screenshots.filter((x) => !x.downloaded).flatMap((x) => x.files)}); refreshVideos(false); };
+
 $("v-refresh").onclick = () => refreshVideos(true);
 $("v-all").onclick = async () => { await api("/app/videos/download", {paths: vstate.videos.filter((x) => !x.downloaded).map((x) => x.path)}); refreshVideos(false); };
 $("v-openfolder").onclick = () => api("/app/videos/open", {});
 $("v-choose").onclick = async () => { await api("/app/videos/choose", {}); refreshVideos(false); };
-for (const [id, key] of [["v-auto", "auto"], ["v-auto-clips", "auto_clips"], ["v-auto-recordings", "auto_recordings"], ["v-delete", "delete_after"]])
+for (const [id, key] of VSWITCHES)
   $(id).onchange = async () => { await api("/app/videos/settings", {[key]: $(id).checked}); refreshVideos(false); };
 
 // ------------------------------------------------------------ Cuff settings
