@@ -378,8 +378,9 @@
   </section>
   <section>
     <h2>Type live</h2>
-    <div id="t-box" tabindex="0" class="typebox">Click here, then type. Enter, Backspace, Tab, Esc, Delete, the arrows, Home and End work too.</div>
-    <div class="sub" id="t-count" style="margin-top:8px"></div>
+    <div id="t-box" tabindex="0" class="typebox">Click here, then type. Every key goes to the headset while this box has focus: letters, Enter and the arrows, and shortcuts such as Ctrl+A, Alt+Tab and the Windows key.</div>
+    <div class="actions" style="margin-top:8px"><span class="sub grow" id="t-count"></span><span class="sub" id="t-last"></span></div>
+    <p class="sub">Ctrl+V pastes the PC's clipboard. Only Ctrl+Alt+Del and Win+L stay with the PC. Clicking anywhere else, or another window, gives the keyboard back to the PC.</p>
   </section>
   <section>
     <h2>Send text</h2>
@@ -392,7 +393,7 @@
   <section>
     <h2>Clipboard</h2>
     <div class="actions"><button id="t-clip">Send the clipboard</button>
-      <span class="sub">or press <code>Ctrl</code>+<code>Alt</code>+<code>V</code> anywhere on the PC, even with this window closed.</span></div>
+      <span class="sub">or press <code>Ctrl</code>+<code>Alt</code>+<code>V</code> anywhere on the PC, even with this window closed, or <code>Ctrl</code>+<code>V</code> in the Type live box.</span></div>
     <div class="msg" id="t-msg"></div>
   </section>
   <p class="sub">Only paired headsets receive it, and nothing typed is logged on either side. The headset can turn this off in Cuff settings.</p>
@@ -460,6 +461,7 @@ function show(name) {
   page = document.getElementById("page-" + name) ? name : "overview";
   document.querySelectorAll(".page").forEach((p) => p.classList.toggle("on", p.id === "page-" + page));
   document.querySelectorAll("nav a").forEach((a) => a.classList.toggle("on", a.dataset.page === page));
+  if (page !== "type" && document.activeElement === $("t-box")) $("t-box").blur();  // (gives the keys back)
   if (page === "settings") loadSettings();
   if (page === "recordings") refreshVideos(true);
   tick();
@@ -997,16 +999,42 @@ $("up-check").onclick = async () => { $("ov-app-sub").textContent = "Checking…
 $("up-install").onclick = async () => { const r = await api("/app/update/install", {}); if (!r.ok) alert(r.message); tick(); };
 
 // ------------------------------------------------------------ typing
+// Type live sends every key while its box has focus. A character goes as text (with Shift, or
+// AltGr, as the layout types it); Enter, Backspace, Tab, Esc, Delete, the arrows, Home and End
+// on their own as named keys; anything else, such as Ctrl+A or F5, as a combination of the codes
+// Steam's ControllerKeyboardSetKeyState takes: HID codes for the key, from e.code (the physical
+// key, whatever the layout), after Steam's own codes for the modifiers held. Keys the page
+// can't stop (Alt+Tab, the Windows key, Ctrl+W...) Cuff for PC takes with a keyboard hook
+// while the page says the box has focus (keycapture.py); those never reach the page, so each
+// key is sent once, by whichever sees it.
 let typed = 0, buffer = "", flushTimer = null;
 const KEYMAP = {Enter: "enter", Backspace: "backspace", Tab: "tab", Escape: "escape", Delete: "delete",
                 ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down", Home: "home", End: "end"};
+const MODS = [["ctrlKey", "Ctrl", 103], ["altKey", "Alt", 100], ["shiftKey", "Shift", 101], ["metaKey", "Win", 102]];
+const CODE_HID = {Enter: 40, Escape: 41, Backspace: 42, Tab: 43, Space: 44, Minus: 45, Equal: 46, BracketLeft: 47,
+  BracketRight: 48, Backslash: 49, Semicolon: 51, Quote: 52, Backquote: 53, Comma: 54, Period: 55, Slash: 56,
+  PrintScreen: 70, ScrollLock: 71, Pause: 72, Insert: 73, Home: 74, PageUp: 75, Delete: 76, End: 77, PageDown: 78,
+  ArrowRight: 79, ArrowLeft: 80, ArrowDown: 81, ArrowUp: 82, NumpadDivide: 84, NumpadMultiply: 85,
+  NumpadSubtract: 86, NumpadAdd: 87, NumpadEnter: 88, NumpadDecimal: 99, NumpadComma: 133, IntlRo: 135,
+  KanaMode: 136, IntlYen: 137, Convert: 138, NonConvert: 139};
+for (let i = 0; i < 26; i++) CODE_HID["Key" + String.fromCharCode(65 + i)] = 4 + i;
+for (let i = 1; i <= 9; i++) { CODE_HID["Digit" + i] = 29 + i; CODE_HID["Numpad" + i] = 88 + i; }
+CODE_HID.Digit0 = 39; CODE_HID.Numpad0 = 98;
+for (let i = 1; i <= 12; i++) CODE_HID["F" + i] = 57 + i;
+// (The key left of Z on European keyboards, the menu key and keypad = have HID codes Steam reads as
+// its modifiers, so they go only as the characters they type.)
+const MODKEYS = new Set(["Control", "Shift", "Alt", "AltGraph", "Meta", "OS"]);  // on their own: nothing
+const PASS = new Set(["CapsLock", "NumLock", "ScrollLock", "Dead", "Process", "Unidentified"]);  // the PC's
+function keyName(code) { return code.replace(/^(Key|Digit|Arrow)/, "").replace(/^Numpad/, "Num "); }
 function showTyping(t) {
   if (page === "type") api("/app/typing/open", {});
   $("t-dot").className = "dot" + (t.headset_polling ? " on" : t.active ? " warn" : "");
   $("t-status").textContent = t.headset_polling ? "The headset is listening." + (t.pending ? ` ${t.pending} waiting…` : "")
     : t.active ? "Waiting for the headset to listen (a few seconds)…" : "Open this page, or press Ctrl+Alt+V, and the headset starts listening.";
 }
-function counted() { $("t-count").textContent = `${typed} key${typed === 1 ? "" : "s"} sent`; }
+let hookKeys = 0, hookBase = null, hookN = null;  // keys the hook sent (it says so every second)
+function counted() { const n = typed + hookKeys - (hookBase || 0); $("t-count").textContent = `${n} key${n === 1 ? "" : "s"} sent`; }
+function lastSent(label) { $("t-last").textContent = `Sent ${label}`; }
 // One send at a time, in order, so a key never overtakes the text typed before it.
 let chain = Promise.resolve();
 function post(body) { chain = chain.then(() => api("/app/typing", body)).catch(() => {}); return chain; }
@@ -1014,19 +1042,58 @@ function flush() {
   clearTimeout(flushTimer); flushTimer = null;
   if (!buffer) return chain;
   const text = buffer; buffer = "";
-  return post({text});
+  return post({text, live: true});
 }
-function sendKey(key) { flush(); return post({key}); }
-$("t-box").addEventListener("keydown", (e) => {
-  if (e.ctrlKey || e.metaKey || e.altKey) return;  // Ctrl+V comes as a paste
-  if (KEYMAP[e.key]) { e.preventDefault(); typed++; sendKey(KEYMAP[e.key]); }
-  else if (e.key.length === 1) { e.preventDefault(); buffer += e.key; typed++; flushTimer = flushTimer || setTimeout(flush, 60); }
+function sendKey(key) { flush(); return post({key, live: true}); }
+function sendCombo(combo, label) { flush(); lastSent(label); return post({combo, live: true}); }
+const tbox = $("t-box"), T_IDLE = tbox.textContent;
+tbox.addEventListener("keydown", (e) => {
+  if (e.isComposing || PASS.has(e.key)) return;
+  const held = e.ctrlKey || e.altKey || e.metaKey;
+  if ([...e.key].length === 1 && (!held || e.getModifierState("AltGraph"))) {  // a character
+    e.preventDefault(); buffer += e.key; typed++; flushTimer = flushTimer || setTimeout(flush, 60);
+  } else if (e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && e.key.toLowerCase() === "v") {
+    return;  // Ctrl+V: the paste event sends the PC's clipboard
+  } else if (MODKEYS.has(e.key)) {
+    e.preventDefault();
+  } else if (KEYMAP[e.key] && !held && !e.shiftKey) {
+    e.preventDefault(); typed++; sendKey(KEYMAP[e.key]);
+  } else {
+    e.preventDefault();
+    const hid = CODE_HID[e.code];
+    if (!hid) return;
+    const mods = MODS.filter(([k]) => e[k]);
+    typed++;
+    sendCombo([...mods.map((m) => m[2]), hid], [...mods.map((m) => m[1]), keyName(e.code)].join("+"));
+  }
   counted();
 });
-$("t-box").addEventListener("paste", (e) => {
+tbox.addEventListener("paste", (e) => {
   e.preventDefault();
   const text = e.clipboardData.getData("text");
-  if (text) { buffer += text; typed += text.length; flush(); counted(); }
+  if (text) { buffer += text; typed += text.length; flush(); counted(); lastSent("the clipboard"); }
+});
+// The hook takes keys only while the page says the box has focus: on focus, every second while it
+// has (so a page that's gone stops it within a few seconds), and on blur.
+let captureTimer = null;
+function capture(on) {
+  return api("/app/typing/capture", {on}).then((r) => {
+    if (r.keys === undefined) return;
+    if (hookBase === null) hookBase = r.keys;
+    if (hookN !== null && r.last_n !== hookN && r.last) lastSent(r.last);
+    hookN = r.last_n; hookKeys = r.keys; counted();
+  }).catch(() => {});
+}
+tbox.addEventListener("focus", () => {
+  tbox.textContent = "Everything you type goes to the headset, shortcuts too. Click outside to stop.";
+  capture(true);
+  clearInterval(captureTimer);
+  captureTimer = setInterval(() => capture(document.hasFocus() && document.activeElement === tbox && page === "type"), 1000);
+});
+tbox.addEventListener("blur", () => {
+  clearInterval(captureTimer); captureTimer = null;
+  tbox.textContent = T_IDLE;
+  flush(); capture(false);
 });
 $("t-send").onclick = async () => {
   const text = $("t-text").value;

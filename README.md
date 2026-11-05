@@ -80,7 +80,8 @@ game's side of a Steam Link stream to the Performance tab. Its window can also:
 - install and update Cuff on the headset over your network;
 - download your clips, recordings and screenshots, by hand or automatically;
 - change all of Cuff's settings with a mouse and keyboard;
-- type on the headset from the PC keyboard, or send it the clipboard (Ctrl+Alt+V);
+- type on the headset from the PC keyboard, shortcuts such as Ctrl+A and Alt+Tab included, or
+  send it the clipboard (Ctrl+Alt+V);
 - show how good the connection is, over the dongle and your network, and while streaming.
 
 Open it later from the Start menu (**Cuff for PC**) or the tray icon. See

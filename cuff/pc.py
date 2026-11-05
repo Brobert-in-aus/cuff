@@ -30,9 +30,10 @@ must carry X-Cuff-Mac, the PC's MAC over the request's nonce and the answer, or 
 gets an error instead, so nothing typed or dictated comes from anyone but the paired PC.
 
 Typing from the PC (pc-server/typing_link.py): while the paired PC's announcement says
-"typing", it long-polls GET /typing/next and types what comes through Steam (steam.py), with
-"Typing from <PC>" pinned on the wrist while text arrives. Settings can refuse it
-(typing_allowed, the "typing" alert switch). Nothing typed is logged.
+"typing", it long-polls GET /typing/next and types what comes (text, keys, and key combinations
+such as Ctrl+A) through Steam (steam.py), with "Typing from <PC>" pinned on the wrist while
+text arrives. Settings can refuse it (typing_allowed, the "typing" alert switch). Nothing typed
+is logged.
 
 state() is "connected" (a checked address heard in the last LOST_S, or configured, and
 paired), "unpaired" (there but not paired), "away" (heard before, remembered in
@@ -595,7 +596,11 @@ class Pc(threading.Thread):
                     try:
                         if not isinstance(item, dict):
                             continue
-                        if isinstance(item.get("key"), str) and item["key"] in steam.KEYS:
+                        # A combination, a key or text; anything else (a kind a newer PC sends)
+                        # is skipped, as headsets before combinations skip those.
+                        if steam.valid_combo(item.get("combo")):
+                            steam.press_combo(item["combo"])
+                        elif isinstance(item.get("key"), str) and item["key"] in steam.KEYS:
                             steam.press_key(item["key"])
                         elif isinstance(item.get("text"), str) and item["text"]:
                             steam.type_text(item["text"])

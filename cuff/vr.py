@@ -239,33 +239,122 @@ class Hands:
             self.system.triggerHapticPulse(i, 0, 20000)
 
 
+class _Gl:
+    """An OpenGL context with no window, made once per process for overlay textures: EGL on
+    Mesa's surfaceless platform, desktop GL (on the Frame that's Mesa's zink, over the Turnip
+    Vulkan driver). It's made on the main thread and stays current there, because SteamVR
+    reads a GL texture through the context current on the thread that calls SetOverlayTexture.
+    Raises OSError if any step fails."""
+
+    TEXTURE_2D, RGBA, RGBA8, UNSIGNED_BYTE = 0x0DE1, 0x1908, 0x8058, 0x1401
+
+    def __init__(self):
+        P, I, U = ctypes.c_void_p, ctypes.c_int, ctypes.c_uint
+        egl = ctypes.CDLL("libEGL.so.1")
+        egl.eglGetProcAddress.restype, egl.eglGetProcAddress.argtypes = P, [ctypes.c_char_p]
+        egl.eglInitialize.argtypes = [P, P, P]
+        egl.eglCreateContext.restype, egl.eglCreateContext.argtypes = P, [P, P, P, P]
+        egl.eglMakeCurrent.argtypes = [P, P, P, P]
+        address = egl.eglGetProcAddress(b"eglGetPlatformDisplayEXT")
+        if not address:
+            raise OSError("EGL has no eglGetPlatformDisplayEXT")
+        display = ctypes.CFUNCTYPE(P, U, P, P)(address)(0x31DD, None, None)  # EGL_PLATFORM_SURFACELESS_MESA
+        if not display or not egl.eglInitialize(display, None, None):
+            raise OSError(f"no surfaceless EGL display (EGL error {egl.eglGetError():#x})")
+        egl.eglBindAPI(0x30A2)  # EGL_OPENGL_API
+        # No config and no surface: EGL_KHR_no_config_context and EGL_KHR_surfaceless_context.
+        self.context = egl.eglCreateContext(display, None, None, (I * 1)(0x3038))  # EGL_NONE
+        if not self.context or not egl.eglMakeCurrent(display, None, None, self.context):
+            raise OSError(f"no OpenGL context (EGL error {egl.eglGetError():#x})")
+        self.egl, self.display = egl, display
+        gl = self.gl = ctypes.CDLL("libOpenGL.so.0")
+        gl.glGetString.restype = ctypes.c_char_p
+        gl.glGenTextures.argtypes = gl.glDeleteTextures.argtypes = [I, ctypes.POINTER(U)]
+        gl.glBindTexture.argtypes = [U, U]
+        gl.glTexParameteri.argtypes = [U, U, I]
+        gl.glTexImage2D.argtypes = [U, I, I, I, I, I, U, U, ctypes.c_char_p]
+        gl.glTexSubImage2D.argtypes = [U, I, I, I, I, I, U, U, ctypes.c_char_p]
+        gl.glGetError.restype = U
+        self.renderer = (gl.glGetString(0x1F01) or b"?").decode(errors="replace")  # GL_RENDERER
+
+    def texture(self):
+        """A new texture: [GL name, size], the size None until the first upload."""
+        name = ctypes.c_uint(0)
+        self.gl.glGenTextures(1, ctypes.byref(name))
+        self.gl.glBindTexture(self.TEXTURE_2D, name.value)
+        for param, value in ((0x2801, 0x2601), (0x2800, 0x2601), (0x2802, 0x812F), (0x2803, 0x812F)):
+            self.gl.glTexParameteri(self.TEXTURE_2D, param, value)  # linear filtering, clamped edges
+        return [name, None]
+
+    def upload(self, tex, img):
+        """Put img's pixels in tex, finished on the GPU by the time this returns. The texture's
+        storage is made again only when the size changes."""
+        if img.mode != "RGBA":
+            img = img.convert("RGBA")
+        gl, (w, h) = self.gl, img.size
+        gl.glBindTexture(self.TEXTURE_2D, tex[0].value)
+        if tex[1] != img.size:
+            gl.glTexImage2D(self.TEXTURE_2D, 0, self.RGBA8, w, h, 0, self.RGBA, self.UNSIGNED_BYTE, img.tobytes())
+        else:
+            gl.glTexSubImage2D(self.TEXTURE_2D, 0, 0, 0, w, h, self.RGBA, self.UNSIGNED_BYTE, img.tobytes())
+        gl.glFinish()
+        err = gl.glGetError()
+        if err:
+            tex[1] = None
+            raise OSError(f"GL error {err:#x}")
+        tex[1] = img.size
+
+    def delete(self, tex):
+        self.gl.glDeleteTextures(1, ctypes.byref(tex[0]))
+
+
+def _bounds(flipped):
+    """Texture bounds: a GL texture's first row is its bottom one, so it's shown flipped."""
+    b = openvr.VRTextureBounds_t()
+    b.uMin, b.uMax = 0.0, 1.0
+    b.vMin, b.vMax = (1.0, 0.0) if flipped else (0.0, 1.0)
+    return b
+
+
 class Layer:
-    """An overlay fed from PNG files, double-buffered.
+    """An overlay fed with images, double-buffered: each of its two twin overlays has its own
+    OpenGL texture, updated in place, so a new image costs SteamVR nothing that stays.
 
-    SetOverlayRaw would avoid the PNG, but SteamVR accepts only ~200 raw uploads per
-    process (visible or hidden overlays alike); after that every call fails with
-    RequestFailed for good. SetOverlayFromFile has no such limit (600 of 600 in a test).
+    Why a texture. The other ways of handing SteamVR an image cost too much (measured on the
+    Frame, SteamVR 2.18 and 2.19):
+      - SetOverlayFromFile keeps every path's image in vrcompositor, about 1.15 MB for the
+        panel, until SteamVR restarts, whatever is cleared, recreated or deleted (reusing a name
+        shows the old image). A changing panel grew it by gigabytes over a day.
+      - SetOverlayRaw isn't cached, but SteamVR accepts only ~200 raw uploads per process
+        (visible or hidden overlays alike); after that every call fails with RequestFailed.
+      - SetOverlayTexture with a GL texture: 400 updates left vrcompositor's memory flat, as
+        long as each twin keeps its one texture. A new texture for every image cost the
+        compositor about 0.5 MB of GPU memory each, kept after the process exited. So a twin's
+        texture is only re-specified (glTexImage2D, same name) when the image's size changes.
+    Textures cost this process a fixed ~270 MB (SteamVR's client library maps a 256 MB buffer
+    on the first SetOverlayTexture, GL or Vulkan alike) and the GL libraries ~45 MB.
 
-    SetOverlayFromFile loads asynchronously: the overlay has no texture until the new one
-    arrives, a few frames later, and showing it then blinks. So each image goes to the twin
-    behind: it is shown one sort order below the front (and covered by it) while it loads,
-    then raised once its texture reports ready or after SWAP_MAX frames, whichever is first;
-    the old front is hidden a frame later. While the layer isn't visible there is nothing to
-    blink, so the swap is immediate. Images that arrive mid-swap wait; only the latest is kept.
-    (A wait for a *hidden* twin to report ready proved unreliable: in the panel process it
-    sometimes never did, while another process saw the texture loaded.)
-    Every image gets a new file name, unique across runs (pid + serial): SteamVR caches
-    SetOverlayFromFile by path, so reloading a path kept showing the first image, and after a
-    restart the reused names showed the previous run's (old layout's) images. Only the last KEEP_FILES files
-    per layer are kept, so none is deleted while the compositor might still read it.
+    Fallback. If the GL context can't be made, or a texture call fails, that's logged once and
+    the layer loads PNG files from then on, so it never shows nothing. Each image gets a new
+    file name, unique across runs (pid + serial), as SteamVR caches by path; only the last
+    KEEP_FILES per layer are kept, so none is deleted while the compositor might still read it.
 
-    That cache is also never emptied: every file costs vrcompositor about 1.15 MB until SteamVR
-    restarts, whatever is cleared, recreated or deleted (measured 2026-11-05; reusing a name
-    shows the old image). So a layer loads as few images as it can:
+    Double buffering. Each image goes to the twin behind: it's shown one sort order below the
+    front (and covered by it) while it loads, then raised once it's ready (_ready) or after
+    SWAP_MAX frames, whichever is first; the old front is hidden a frame later. While the layer
+    isn't visible there is nothing to blink, so the swap is immediate. Images that arrive
+    mid-swap wait; only the latest is kept. A texture takes effect within about 5 ms and the
+    overlay is never without one, but a new size and its top-anchored position have to change
+    in the same frame, which the swap does. A file load leaves the overlay without a texture
+    until it's read: that blink is why the twins exist. (A wait for a *hidden* twin to report
+    ready proved unreliable: in the panel process it sometimes never did.)
+
+    A layer still loads as few images as it can (on the file path each costs vrcompositor
+    ~1 MB; a texture upload takes ~2 ms on the main thread):
       - none while it isn't on show, or while the headset isn't in use (held, class-wide, by
-        the app from SteamVR's activity level): the latest waits, and loads when it's shown;
+        the app from SteamVR's activity level; in standby the compositor doesn't take new
+        textures anyway): the latest waits, and loads when it's shown;
       - none that's the same, pixel for pixel, as the last one it loaded.
-    The real fix is a texture instead of a file (SetOverlayTexture), not done yet.
     """
 
     SWAP_MIN, SWAP_MAX = 2, 12
@@ -273,6 +362,8 @@ class Layer:
     KEEP_FILES = 6
     _last_error = 0.0
     held = False  # the headset isn't in use: no layer loads anything (set by the app)
+    _gl = None  # the process's _Gl, made by the first texture upload
+    _gl_failed = False  # it couldn't be made: every layer loads files
 
     def __init__(self, ov, key, name, width, sort=0, anchor_top=False):
         """anchor_top: images of different heights keep their top edge where an H_OPEN image's
@@ -302,6 +393,10 @@ class Layer:
         self.wanted = False  # place()'s visible: whether the layer is asked to be on show
         self.shown = [False, False]
         self.digest = None  # the pixels last given to SteamVR, so the same image isn't loaded twice
+        self.textures = [None, None]  # each twin's GL texture, made by its first upload
+        self.flipped = [False, False]  # whether each twin's texture bounds are flipped (for GL)
+        self.use_texture = True  # False once a texture call failed: this layer loads files
+        self.timed_out = False  # a texture swap went on SWAP_MAX rather than readiness (logged once)
 
     def set_sort(self, sort):
         """Move the layer in the draw order (the placement preview flips sides)."""
@@ -322,16 +417,10 @@ class Layer:
         self.pending = None if d == self.digest else (img, d)
 
     def _load(self, i, img, digest):
-        """Write img to twin i's file and load it; on failure keep it for a retry."""
+        """Give img to twin i, as a texture or failing that a file; on failure keep it for a retry."""
         try:
-            self.serial += 1
-            # The pid keeps names unique across runs too: SteamVR's by-path cache outlives us.
-            path = os.path.join(RUN_DIR, f"{self.key}.{os.getpid()}.{self.serial}.png")
-            img.save(path, compress_level=1)
-            self.files.append(path)
-            while len(self.files) > self.KEEP_FILES:
-                os.remove(self.files.pop(0))
-            self.ov.setOverlayFromFile(self.handles[i], path)
+            if not self._load_texture(i, img):
+                self._load_file(i, img)
             self.sizes[i] = img.size
             self.digest = digest
             return True
@@ -344,6 +433,55 @@ class Layer:
                 self.pending = (img, digest)
             self.loading, self.retry = None, self.RETRY_FRAMES
             return False
+
+    @classmethod
+    def _context(cls):
+        """The process's GL context, made on first use; None if it can't be (logged once)."""
+        if cls._gl is None and not cls._gl_failed:
+            try:
+                cls._gl = _Gl()
+                print(f"layer: images go in as OpenGL textures ({cls._gl.renderer})", flush=True)
+            except (OSError, AttributeError) as e:
+                cls._gl_failed = True
+                print(f"layer: no OpenGL context ({e}), loading images from files", file=sys.stderr, flush=True)
+        return cls._gl
+
+    def _flip(self, i, flipped):
+        if self.flipped[i] != flipped:
+            self.ov.setOverlayTextureBounds(self.handles[i], _bounds(flipped))
+            self.flipped[i] = flipped
+
+    def _load_texture(self, i, img):
+        """Upload img into twin i's texture and hand that to SteamVR. False if this layer loads
+        files instead: there's no GL context, or a texture call failed (logged; files from then on)."""
+        gl = self.use_texture and self._context()
+        if not gl:
+            return False
+        try:
+            if self.textures[i] is None:
+                self.textures[i] = gl.texture()
+            gl.upload(self.textures[i], img)
+            self._flip(i, True)
+            self.ov.setOverlayTexture(self.handles[i], openvr.Texture_t(
+                handle=self.textures[i][0].value, eType=openvr.TextureType_OpenGL, eColorSpace=openvr.ColorSpace_Auto))
+            return True
+        except (openvr.error_code.OverlayError, OSError) as e:
+            self.use_texture = False
+            print(f"layer: texture upload for {self.key} failed ({e!r}), loading files from now on",
+                  file=sys.stderr, flush=True)
+            return False
+
+    def _load_file(self, i, img):
+        """Write img to a new file and load it into twin i (the fallback)."""
+        self.serial += 1
+        # The pid keeps names unique across runs too: SteamVR's by-path cache outlives us.
+        path = os.path.join(RUN_DIR, f"{self.key}.{os.getpid()}.{self.serial}.png")
+        img.save(path, compress_level=1)
+        self.files.append(path)
+        while len(self.files) > self.KEEP_FILES:
+            os.remove(self.files.pop(0))
+        self._flip(i, False)
+        self.ov.setOverlayFromFile(self.handles[i], path)
 
     def offset(self, i):
         """Twin i's shift from the frame, in metres along the panel's y (top anchoring)."""
@@ -380,13 +518,19 @@ class Layer:
         self.retiring, self.front = self.front, 1 - self.front
         self._order()
 
+    def _textured(self, i):
+        """Twin i takes textures (not the file fallback)."""
+        return bool(self.use_texture and self.textures[i])
+
     def _ready(self, i):
-        """Twin i has a texture (False while a SetOverlayFromFile load is in flight)."""
+        """Twin i shows its new image. A texture: SteamVR reports the new image's size (one the
+        same size as the last can't be told apart, but the old one shows until then, so nothing
+        blinks). A file: the twin has a texture at all (none while the load is in flight)."""
         try:
-            self.ov.getOverlayTextureSize(self.handles[i])
-            return True
+            size = self.ov.getOverlayTextureSize(self.handles[i])
         except openvr.error_code.OverlayError:
             return False
+        return size == self.sizes[i] if self.use_texture and self.textures[i] else True
 
     def tick(self):
         back = 1 - self.front
@@ -400,7 +544,12 @@ class Layer:
             self.retiring = None
         elif self.loading is not None:
             waited, _ = self.loading
-            if not self.visible or waited >= self.SWAP_MAX or (waited >= self.SWAP_MIN and self._ready(back)):
+            ready = waited >= self.SWAP_MIN and self._ready(back)
+            if not self.visible or waited >= self.SWAP_MAX or ready:
+                if self.visible and not ready and self._textured(back) and not self.timed_out:
+                    self.timed_out = True  # once: a hidden twin's texture wasn't reported in time
+                    print(f"layer: {self.key} swapped before SteamVR reported its new image "
+                          f"({self.SWAP_MAX} frames)", file=sys.stderr, flush=True)
                 self.loading = None
                 self._swap()
             else:
@@ -418,9 +567,14 @@ class Layer:
         want = [False, False]
         if self.visible:
             want[self.front] = True
-            if self.retiring is not None:
+            # A file twin loads underneath the front, as a loading file overlay shows nothing, and
+            # the old front stays a frame after a swap. A texture twin needs neither: SteamVR keeps
+            # its old image until the new one is in, so it loads hidden and the old front goes in
+            # the same frame. Shown, a twin of another height stuck out above or below the front
+            # (it's placed for its new height before SteamVR draws the new image).
+            if self.retiring is not None and not self._textured(self.front):
                 want[self.retiring] = True
-            if self.loading is not None:  # loads underneath the front
+            if self.loading is not None and not self._textured(1 - self.front):
                 want[1 - self.front] = True
         for i, h in enumerate(self.handles):
             if want[i] != self.shown[i]:
@@ -430,6 +584,10 @@ class Layer:
     def destroy(self):
         for h in self.handles:
             self.ov.destroyOverlay(h)
+        for tex in self.textures:
+            if tex is not None:
+                Layer._gl.delete(tex)
+        self.textures = [None, None]
 
 
 class RoomView:

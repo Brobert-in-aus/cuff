@@ -13,9 +13,13 @@ headset.
   while the Type page is open (it says so every few seconds) or something was sent in the
   last ACTIVE_S. So the hotkey works with the window closed; it starts within a couple of
   seconds.
-- Items: {"seq", "text"} or {"seq", "key": enter|backspace|tab|escape|delete|left|right|up|
-  down|home|end}. Items older than STALE_S are dropped unsent, so text typed while the
-  headset was away doesn't arrive later somewhere unexpected.
+- Items: {"seq", "text"}, {"seq", "key": enter|backspace|tab|escape|delete|left|right|up|
+  down|home|end}, or {"seq", "combo": [codes]}: a key combination such as Ctrl+A, 1 to
+  MAX_COMBO codes pressed in order and released in reverse. The codes are what Steam's
+  ControllerKeyboardSetKeyState takes: USB HID usage codes for keys, and Steam's own for the
+  modifiers (Ctrl 103, Alt 100, Shift 101, Super 102). A headset older than combos ignores
+  them. Items older than STALE_S are dropped unsent, so text typed while the headset was away
+  doesn't arrive later somewhere unexpected.
 - Nothing typed is logged; the log says only how many characters went.
 """
 import ctypes
@@ -29,6 +33,8 @@ POLL_S = 25.0
 ACTIVE_S = 15.0
 STALE_S = 20.0
 MAX_TEXT = 4000
+MAX_COMBO = 6  # modifiers and a key
+MOD_CODES = {"ctrl": 103, "alt": 100, "shift": 101, "super": 102}  # Steam's, not HID's
 
 
 class Typing:
@@ -49,17 +55,19 @@ class Typing:
     def page_open(self):
         self.page_at = time.monotonic()
 
-    def send(self, text=None, key=None):
-        """(ok, message)."""
-        if key is None and text is None:
+    def send(self, text=None, key=None, combo=None):
+        """(ok, message). One of text, a key name (KEYS) or a combo (codes: valid_combo)."""
+        if key is None and text is None and combo is None:
             return False, "Nothing to type."
+        if combo is not None and not valid_combo(combo):
+            return False, f"A key combination is 1 to {MAX_COMBO} key codes from 4 to 231."
         if key is not None and key not in KEYS:
             return False, f"Unknown key {key}."
         if text is not None:
             text = str(text)[:MAX_TEXT]
             if not text:
                 return False, "Nothing to type."
-        item = {"key": key} if key else {"text": text}
+        item = {"combo": list(combo)} if combo is not None else {"key": key} if key else {"text": text}
         with self.cond:
             self.seq += 1
             item["seq"] = self.seq
@@ -96,6 +104,13 @@ class Typing:
         now = time.monotonic()
         return {"active": self.active(), "pending": max(0, self.seq - self.delivered),
                 "headset_polling": now - self.fetched_at < POLL_S + 5}
+
+
+def valid_combo(codes):
+    """Whether codes is a key combination the headset presses: a list of 1 to MAX_COMBO
+    whole numbers from 4 to 231 (the headset checks the same)."""
+    return (isinstance(codes, list) and 1 <= len(codes) <= MAX_COMBO
+            and all(type(c) is int and 4 <= c <= 231 for c in codes))
 
 
 def clipboard_text():

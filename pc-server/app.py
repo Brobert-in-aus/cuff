@@ -11,7 +11,8 @@
   last minute. Its menu: Open Cuff for PC (also a double-click), Pair a headset, Recordings,
   Quit. Closing the window leaves the app running.
 - Ctrl+Alt+V anywhere types the PC's clipboard on the headset (typing_link.py), with a
-  notification from the tray icon. The tray menu's Type on the Frame opens the Type page.
+  notification from the tray icon. The tray menu's Type on the Frame opens the Type page,
+  whose Type live box takes every key while it has focus (keycapture.py).
 - Only one copy runs (per port, per Windows session): a named mutex, held while it runs. A
   second start (the logon task, the Start menu shortcut, or by hand) opens the running copy's
   window, waiting for it to answer if it's still starting (the speech model takes a while),
@@ -138,6 +139,8 @@ def tray(port, stop):
     import pystray
 
     def quit_app(icon, _):
+        if server.CAPTURE:
+            server.CAPTURE.close()  # (the process going would take the hook with it anyway)
         icon.stop()
         stop.set()
 

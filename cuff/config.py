@@ -12,7 +12,7 @@ import sys
 import tomllib
 
 CONFIG_FILE = os.path.expanduser(os.environ.get("CUFF_CONFIG", "~/.config/cuff/config.toml"))
-RUN_DIR = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "cuff")  # layer PNGs
+RUN_DIR = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), "cuff")  # layer PNGs (when textures fail)
 CACHE_DIR = os.path.expanduser("~/.cache/cuff")  # remembered state
 DATA_DIR = os.path.expanduser("~/.local/share/cuff/data")  # charms' installed data
 

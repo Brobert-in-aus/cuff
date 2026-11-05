@@ -1,8 +1,8 @@
 """Steam's own client API, evaluated in its SharedJSContext over the CEF remote debugger
 (127.0.0.1:8080). Used to type dictated text, and text typed on the PC (cuff/pc.py), into the
 focused window: games, the desktop and Steam itself all receive
-SteamClient.Input.ControllerKeyboardSendText. Keys such as Enter go through
-ControllerKeyboardSetKeyState, as Steam's on-screen keyboard does.
+SteamClient.Input.ControllerKeyboardSendText. Keys such as Enter, and key combinations such as
+Ctrl+A, go through ControllerKeyboardSetKeyState, as Steam's on-screen keyboard does.
 
 Undocumented, so typing_ok() checks that the call is there; dictation greys its button out if
 it isn't. Any call that fails (Steam's debugger unreachable, or the expression throwing) forgets
@@ -178,3 +178,30 @@ def press_key(name):
     code = KEYS[name]
     steam_eval(f"SteamClient.Input.ControllerKeyboardSetKeyState({code}, true);"
                f"SteamClient.Input.ControllerKeyboardSetKeyState({code}, false)")
+
+
+# ControllerKeyboardSetKeyState takes HID usage codes for keys, but its own codes for the
+# modifiers (not HID's 224-231): so Ctrl+A is [103, 4].
+MODIFIERS = {"ctrl": 103, "alt": 100, "shift": 101, "super": 102}
+MAX_COMBO = 6
+
+
+def valid_combo(codes):
+    """Whether codes is a combination press_combo takes: a list of 1 to MAX_COMBO whole
+    numbers from 4 to 231 (modifiers first, then the key)."""
+    return (isinstance(codes, list) and 1 <= len(codes) <= MAX_COMBO
+            and all(type(c) is int and 4 <= c <= 231 for c in codes))
+
+
+def press_combo(codes):
+    """Press a key combination (Ctrl+A is [103, 4]) in the focused window: each code down in
+    order, a moment, then up in reverse, with short gaps so the desktop sees the modifiers held
+    before the key. One evaluate call, which waits for the whole press."""
+    if not valid_combo(codes):
+        raise ValueError(f"not a key combination: {codes!r}")
+    steam_eval("(async () => { const I = SteamClient.Input, w = (ms) => new Promise((r) => setTimeout(r, ms));"
+               f" const c = {json.dumps(codes)};"
+               " for (const k of c) { I.ControllerKeyboardSetKeyState(k, true); await w(25); }"
+               " await w(40);"
+               " for (const k of [...c].reverse()) { I.ControllerKeyboardSetKeyState(k, false); await w(25); }"
+               " })()")

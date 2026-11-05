@@ -96,9 +96,21 @@ Built 2026-10-26. The Windows installer ("The installer", below) shipped with v1
     bitrate, and per minute the held frames, stalls, bitrate step-downs and bad-link events.
   - **Overview** sums it up under Headset: "dongle good, 2 ms · network good, 3 ms".
 - **Type on the Frame:** what you type goes to whatever has focus in the headset.
-  - **Type live:** click the box and type; letters go in bursts as you type, and Enter,
-    Backspace, Tab, Esc, Delete, the arrows, Home and End as keys. Pasting sends the text.
-    It shows only how many keys went, not what.
+  - **Type live:** click the box and type. While the box has focus, every key goes to the
+    headset and none of them acts on the PC: letters go in bursts as you type (accents and
+    AltGr characters as your layout types them), Enter, Backspace, Tab, Esc, Delete, the
+    arrows, Home and End as keys, and shortcuts as key combinations: Ctrl+A, Ctrl+Shift+T,
+    Alt+Tab, Alt+F4, the Windows key and Win+anything, F1-F12, Page Up and so on. Ctrl+V
+    pastes the PC's clipboard as text. Only Ctrl+Alt+Del and Win+L stay with the PC.
+    Clicking anywhere else (another window, or elsewhere on the page) gives the keyboard
+    back. It shows how many keys went and the last shortcut ("Sent Ctrl+A"), not what was
+    typed.
+    - **Shortcuts need both ends updated:** a headset older than combinations ignores them
+      (letters and the named keys still work), and an older Cuff for PC doesn't send them.
+    - **Physical keys:** a shortcut is sent as the key's position (as HID codes are), so it
+      means the same on the headset when its keyboard layout matches the PC's. The key left
+      of Z on European keyboards, the menu key and keypad = send only the characters they
+      type: Steam reads their HID codes as its modifiers.
   - **Send text:** write it first, then send it in one go, optionally followed by Enter.
   - **Send the clipboard** (or Ctrl+Alt+V anywhere).
   - The headset can refuse all of it: Cuff settings > Typing from the PC.
@@ -112,6 +124,8 @@ Built 2026-10-26. The Windows installer ("The installer", below) shipped with v1
 | `pc-server/server.py` | The HTTP server: the headset's API, and `/app/*` for the page |
 | `pc-server/appapi.py` | The page's API, and the guard on it (below) |
 | `pc-server/app.html` | The page: plain HTML and JavaScript, no build step; polls `/app/state` every 2 s |
+| `pc-server/typing_link.py` | Typing on the headset: the queue it long-polls, the clipboard and its Ctrl+Alt+V hotkey |
+| `pc-server/keycapture.py` | Type live's keyboard hook: takes every key while the box has focus (below) |
 | `pc-server/frame.py` | The SSH link to the headset (`paramiko`): connecting, installing, pairing, settings |
 | `pc-server/videos.py` | Recordings and screenshots: listing, thumbnails, downloads, automatic downloads |
 | `pc-server/linkquality.py` | The Connection page: the PC's Wi-Fi adapters (Windows' WLAN API), the headset's radios (`iw` over SSH), round trips (Windows' ICMP API), and the stream's link (`stream.py`). No `netsh` or `ping` output is read: their labels follow the display language |
@@ -197,9 +211,48 @@ Built 2026-10-26. The Windows installer ("The installer", below) shipped with v1
   - **Restarts:** `seq` starts from 0 again when the app restarts, so each run has a random
     id (`run`). A poll with another run's id, or a `seq` this run hasn't reached, starts over
     as a new headset does, instead of waiting for numbers the old run had reached.
+  - **Items:** `{"text"}`, `{"key": enter|backspace|tab|escape|delete|left|right|up|down|
+    home|end}`, or `{"combo": [codes]}`: 1 to 6 codes, modifiers first, then the key, each
+    from 4 to 231 (checked on the PC and again on the headset). The codes are what Steam's
+    `ControllerKeyboardSetKeyState` takes: USB HID usage codes for keys (a-z 4-29, 1-0 30-39,
+    Enter 40, F1-F12 58-69...), but Steam's own for the modifiers: Ctrl 103, Alt 100,
+    Shift 101, Super 102. So Ctrl+A is `[103, 4]`. A headset that doesn't know an item's kind
+    skips it, as v1.2.1 and older skip combinations.
   - **Typing it:** text goes in through Steam's `ControllerKeyboardSendText`, as dictation
     does. Keys go through `ControllerKeyboardSetKeyState` with USB HID key codes, as Steam's
-    own on-screen keyboard does.
+    own on-screen keyboard does. A combination presses each code down in order 25 ms apart,
+    waits 40 ms, and releases them in reverse, in one call (`steam.press_combo`).
+  - **Type live's keys** (`app.html`): a character with no Ctrl, Alt or Windows key held
+    (Shift is fine, and so is AltGr) goes as text; the named keys on their own as keys;
+    anything else as a combination, from the key's `code` (its position) and the modifiers
+    held. A modifier pressed on its own sends nothing; Caps Lock and Num Lock are left to the
+    PC.
+  - **Keys the page can't stop** (`keycapture.py`): Alt+Tab, the Windows key, Alt+F4,
+    Ctrl+Esc and Edge's own shortcuts (Ctrl+W, Ctrl+N, Ctrl+T) never reach a page, or can't
+    be cancelled there. So a Windows low-level keyboard hook (`WH_KEYBOARD_LL`) swallows
+    every key and sends it itself, only while both:
+    - the page says the box has focus: `POST /app/typing/capture {"on": true}` on focus and
+      every second after, `{"on": false}` on blur. Without a word for 2.5 s (the page
+      crashed or closed), it stops;
+    - the window in front is Cuff for PC's: a Chromium window titled "Cuff for PC" (Edge's
+      app window; in a browser tab, "Cuff for PC - <browser>").
+    Otherwise keys go through as usual. The mouse is never captured, so clicking anywhere
+    else always ends it. The hook is installed only while the page says the box has focus,
+    on a thread of its own, and removed when that stops or the app quits.
+    - **The same rules:** a key that types a character (ToUnicodeEx, with the front window's
+      layout and the modifiers held; dead keys combine as usual) goes as text; Ctrl+Alt counts
+      as AltGr when the layout types something with it. The named keys go as keys; anything
+      else as a combination from the key's scan code. Ctrl+V and Ctrl+Alt+V send the PC's
+      clipboard. Lock keys, and keys with no HID code (volume, media), go through to the PC.
+    - **Exactly once:** a key the hook swallows never reaches the page; one it lets through
+      is sent by the page if the box has it. A key's release is swallowed exactly when its
+      press was, so Windows never sees half a key.
+    - **Kept quick:** the callback only decides, queues the key and returns; a worker thread
+      works out what to send. Windows silently removes a low-level hook that takes longer
+      than `LowLevelHooksTimeout` (about a second; a registry value) to answer, as when Python
+      is busy. A key that then reaches the page shows the hook's gone (`page_key`), and it's
+      installed again, with a line in the log.
+    - **Out of reach:** Ctrl+Alt+Del and Win+L never reach a hook.
   - **On the wrist:** "Typing from <PC>" is pinned while text arrives, until 8 s after the
     last.
   - **Not logged:** neither side logs what's typed, only how many characters.

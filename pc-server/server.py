@@ -63,6 +63,7 @@ from pairing import response_mac as pairing_mac
 
 PAIRING = None
 TYPING = None  # typing_link.Typing, for app.py's hotkey
+CAPTURE = None  # keycapture.Capture on Windows: Type live's keyboard hook
 LOG_FILE = None  # --log, shown on the app page
 APP_PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app.html")
 LOG_LINES = 40
@@ -351,8 +352,11 @@ def main():
     global PAIRING
     PAIRING = pairing.Pairing(args.token)
     stream.start()
-    global TYPING
+    global TYPING, CAPTURE
     TYPING = typing_link.Typing()
+    if os.name == "nt":
+        import keycapture
+        CAPTURE = keycapture.Capture(TYPING)
     if not args.no_beacon:
         beacon.Beacon(args.port, PAIRING, TYPING).start()
     stt = None if args.stats_only else STT(args.model)
@@ -367,7 +371,7 @@ def main():
 
     link = frame_link.Frame(PAIRING)
     app = appapi.AppApi(args.port, lambda: app_state(stt, PAIRING), PAIRING, link, video_store.Videos(link), TYPING,
-                        app_updates.Updates(), linkquality.LinkQuality(link, PAIRING))
+                        app_updates.Updates(), linkquality.LinkQuality(link, PAIRING), CAPTURE)
     httpd.RequestHandlerClass = make_handler(stt, PAIRING, app, TYPING)
     print(f"listening on {args.host}:{args.port}; {len(PAIRING.paired)} headset(s) paired", flush=True)
     try:

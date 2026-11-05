@@ -29,7 +29,10 @@ which only the page can read) instead of the header. server.py puts its other ro
   GET  /app/videos/thumb?key=&path=  a JPEG (key: /app/state's thumb_key)
   GET  /app/videos/screenshot?key=&name=&thumb=1  a screenshot file: its PNG, or with thumb a
                                small JPEG (name: <time>-vr.png or <time>-preview.png)
-  POST /app/typing             {"text"} or {"key"}: type on the headset (typing_link.py)
+  POST /app/typing             {"text"}, {"key"} or {"combo"}: type on the headset (typing_link.py);
+                               "live": true from Type live
+  POST /app/typing/capture     {"on"}: the Type live box has focus, or not (keycapture.py); every
+                               second while it has; -> {"capturing", "keys", "last", "last_n"}
   POST /app/typing/clipboard   type the clipboard's text
   POST /app/typing/open        the Type page is open (it says so every few seconds)
   POST /app/update/check       look for a newer release now (updates.py)
@@ -52,9 +55,9 @@ SHOT = "/app/videos/screenshot"  # the same
 
 
 class AppApi:
-    def __init__(self, port, state, pairing, frame, videos, typing, updates, link):
+    def __init__(self, port, state, pairing, frame, videos, typing, updates, link, capture=None):
         self.port, self.state, self.pairing, self.frame, self.videos = port, state, pairing, frame, videos
-        self.typing, self.updates, self.link = typing, updates, link
+        self.typing, self.updates, self.link, self.capture = typing, updates, link, capture
         self.thumb_key = secrets.token_urlsafe(16)  # new each run
 
     def allowed(self, handler, path):
@@ -115,7 +118,9 @@ class AppApi:
             "/app/videos/settings": lambda: (v.save_settings(body), (True, "Saved."))[1],
             "/app/videos/open": lambda: self._open(body.get("path")),
             "/app/videos/choose": self._choose,
-            "/app/typing": lambda: self.typing.send(text=body.get("text"), key=body.get("key")),
+            "/app/typing": lambda: self._type(body),
+            "/app/typing/capture": lambda: (self.capture.page(bool(body.get("on"))) if self.capture
+                                            else {"capturing": False, "keys": 0, "last": "", "last_n": 0}),
             "/app/typing/clipboard": lambda: typing_link.send_clipboard(self.typing),
             "/app/typing/open": lambda: (self.typing.page_open(), self.typing.state())[1],
             "/app/update/check": self.updates.check,
@@ -140,9 +145,15 @@ class AppApi:
             return (200 if ok else 400), {"ok": ok, "message": message}
         return 200, out
 
-    @staticmethod
-    def _quit():
+    def _type(self, body):
+        if body.get("live") and self.capture:
+            self.capture.page_key()  # (a key the hook should have taken shows it's gone)
+        return self.typing.send(text=body.get("text"), key=body.get("key"), combo=body.get("combo"))
+
+    def _quit(self):
         print("app: asked to quit (the installer, replacing this copy)", flush=True)
+        if self.capture:
+            self.capture.close()
         threading.Timer(0.5, os._exit, (0,)).start()  # after the reply goes out
         return True, "Quitting."
 

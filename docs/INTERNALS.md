@@ -331,10 +331,37 @@ tab, or none, is remembered across restarts (`~/.cache/cuff/state.json`).
   - **Budget.** A redraw over 50 ms counts against the charm on show and is logged (at most
     once a minute). After three in a row, redraws are spaced at least 1 s apart until one
     comes in under budget.
-- **Images go in as PNG files, not raw.** Each layer image is written to
-  `$XDG_RUNTIME_DIR/cuff/` (about 6 ms for the full panel) and loaded with
-  `SetOverlayFromFile`, under a new file name every time (SteamVR caches by path; the
-  last 6 per layer are kept).
+- **Images go in as OpenGL textures** (since v1.3.0). Each twin overlay of a `Layer` has
+  its own GL texture. A new image is copied into it (`glTexSubImage2D`, or `glTexImage2D`
+  on the same texture when the size changes) and handed over with `SetOverlayTexture`,
+  about 2 ms for the full panel.
+  - **The context.** One per process, made by the first upload on the main thread and
+    left current there: EGL on Mesa's surfaceless platform, no window and no config,
+    desktop GL. On the Frame that's zink over the Turnip Vulkan driver.
+  - **Rows.** A GL texture's first row is its bottom one, so a twin with a texture gets
+    flipped texture bounds (v from 1 to 0). Screenshots showed it the right way up, with
+    the same colours as a file (`ColorSpace_Auto` with `RGBA8`, as for a PNG).
+  - **What it costs SteamVR** (measured 2026-11-05, SteamVR 2.19.1). 400 updates at 10 a
+    second left vrcompositor's anonymous memory unchanged (+0 kB). Its GPU memory rose
+    under 1 MB per overlay once, then stayed within 2 MB. The same measure gave +3.4 MB for
+    three file loads.
+  - **Reuse the texture.** A new texture for every image cost vrcompositor about 0.5 MB
+    of GPU memory each (+198 MB over 400), still held after the process exited. So
+    each twin keeps one.
+  - **What it costs Cuff:** a fixed ~270 MB. SteamVR's client library maps a 256 MB
+    buffer on the process's first `SetOverlayTexture`, GL and Vulkan textures alike. The
+    GL libraries add ~45 MB. That's about as much as 250 file loads used to leak, and it
+    doesn't grow.
+  - **No cap.** 400 of 400 succeeded, and so did 800 more through `Layer`.
+  - **Standby.** While SteamVR has the headset in standby, the compositor doesn't take new
+    textures; the overlay keeps showing the last one it took. `Layer.held` stops uploads
+    then anyway.
+  - **Fallback.** If the context can't be made, every layer loads PNG files as before.
+    If a texture call fails, that layer does from then on. Each is logged once.
+- **Before v1.3.0, images went in as PNG files, not raw.** This is still the fallback.
+  Each layer image is written to `$XDG_RUNTIME_DIR/cuff/` (about 6 ms for the full
+  panel) and loaded with `SetOverlayFromFile`, under a new file name every time (SteamVR
+  caches by path; the last 6 per layer are kept).
   - **Why not raw.** **SteamVR accepts only ~200 `SetOverlayRaw` calls per process.**
     After that every call fails with `RequestFailed` for good. It doesn't matter whether
     the overlay is visible, and pausing doesn't help. In a test, 201 of 600 succeeded.
@@ -350,7 +377,8 @@ tab, or none, is remembered across restarts (`~/.cache/cuff/state.json`).
     - **What it cost before v1.2.1:** redrawing the Performance tab every second, panel in
       view or not, was about 4 GB an hour, and 12.9 GB built up over 66 hours on
       2026-11-03.
-    - **Since v1.2.1, `Layer` loads as little as it can:**
+    - **Since v1.2.1, `Layer` loads as little as it can** (kept with textures, which still
+      cost a little work each):
       - nothing while the layer isn't on show;
       - nothing while SteamVR's activity level says the headset isn't in use (Standby,
         or a timeout). Its pose freezes on a desk, so the panel can seem to be in view.
@@ -358,14 +386,17 @@ tab, or none, is remembered across restarts (`~/.cache/cuff/state.json`).
       The latest image waits and loads when the layer is shown. With the panel on
       Performance and the headset idle, vrcompositor grew by 0 kB in 2 minutes, against
       11.5 MB every 10 s before.
-    - **The real fix,** a texture instead of a file (`SetOverlayTexture`), is still to do.
+    - **The real fix** was a texture instead of a file (above).
 - **Double-buffered layers (`Layer`).** The panel, the title and the sphere each use
-  two overlays, each with its own PNG file.
-  - **Why.** Replacing an overlay's image made it blink on every redraw. That showed
-    on every touch: one redraw on press, one on release.
-  - **How.** A new image goes to the hidden twin, which is shown two frame syncs later.
-    The old one is hidden the frame after that. Images that arrive mid-swap wait, and
-    only the latest is kept.
+  two overlays, each with its own texture (or PNG file).
+  - **Why.** Replacing an overlay's file made it blink on every redraw: the overlay has
+    no texture until the new file is read. That showed on every touch: one redraw on
+    press, one on release. A texture doesn't leave a gap (the new size showed within
+    about 5 ms, and the overlay never lacked a texture), but the twins stay: a new
+    height and its top-anchored position have to change in the same frame.
+  - **How.** A new image goes to the twin behind the front. It's raised once it's ready:
+    at least two frame syncs later, for a texture once SteamVR reports the new image's
+    size, and at most 12. The old one is hidden the frame after that. Images that arrive mid-swap wait, and only the latest is kept.
   - **Errors.** A failed load is retried 30 frames later. Any OpenVR error inside a
     frame is logged (at most once a minute) and that frame is skipped.
 - **Library.** Uses pyopenvr `2.12.1401` and Pillow `13.0.0` in a venv with system
@@ -567,6 +598,29 @@ enter and tab go through as `ControllerKeyboardSetKeyState` presses.
   with when it was last heard from (in memory: a paired headset's once-a-minute check of each
   address is its hello, `cuff/pc.py`). `--no-beacon` runs a second copy that doesn't announce
   itself, for testing.
+- **Typing from the PC** (`pc-server/typing_link.py`; `cuff/pc.py` and `cuff/steam.py` on
+  the headset; docs/PC-APP.md has the details). The headset long-polls the PC's queue and acts
+  on three kinds of item: `{"text"}` through `ControllerKeyboardSendText`, `{"key": <name>}`
+  (enter, backspace, tab, escape, delete, the arrows, home, end) as one
+  `ControllerKeyboardSetKeyState` press of its HID code, and, since the release after v1.2.1,
+  `{"combo": [codes]}`: 1 to 6 codes from 4 to 231, pressed down in order and released in
+  reverse, 25 ms apart with 40 ms held (`steam.press_combo`, one evaluate of an async
+  function). Steam takes HID usage codes for keys, but its own codes for modifiers: Ctrl 103,
+  Alt 100, Shift 101, Super 102, not HID's 224-231 (found on Steam's on-screen keyboard, and
+  checked on the Frame: Ctrl then `a` arrives as Ctrl+A). Any other item, or a malformed one,
+  is skipped, so an older headset ignores combinations.
+  - **Type live captures the keyboard** (`pc-server/keycapture.py`). While the page says its
+    Type live box has focus (`POST /app/typing/capture`, every second, lapsing after 2.5 s) and
+    Cuff for PC's window is in front (a `Chrome_WidgetWin_1` window titled "Cuff for PC"), a
+    `WH_KEYBOARD_LL` hook swallows every key and sends it: characters as text (ToUnicodeEx with
+    that window's layout), the named keys as keys, the rest as combinations from the scan code.
+    That takes Alt+Tab, the Windows key, Alt+F4, Ctrl+Esc and Edge's own Ctrl+W, Ctrl+N and
+    Ctrl+T, which the page can't stop. A key the hook swallows never reaches the page, and
+    the page sends the ones that do, so each key goes once. The hook is installed only while
+    capturing, on its own thread with a message loop; its callback only queues the key.
+    Windows silently drops a hook that answers slower than `LowLevelHooksTimeout`; a key that
+    reaches the page while the hook should have had it reinstalls it. Ctrl+Alt+Del and Win+L
+    can't be captured.
 - **Settings from the PC** (`cuff/remote.py`). Cuff takes `SIGHUP` as "settings changed": the
   overlay loop reloads placement (`Placement.reload`), alerts (`Prefs.reload`) and the quick
   row (`quickrow.reload`), and calls each charm's `reload()` on a thread of its own. Charms on
